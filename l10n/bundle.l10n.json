@@ -1,4 +1,13 @@
 {
+  "Add a CodeTour step": "Add a CodeTour step",
+  "Describe this step using Markdown": "Describe this step using Markdown",
+  "Open a workspace before creating CodeTour authoring guidance.": "Open a workspace before creating CodeTour authoring guidance.",
+  "Select the workspace where CodeTour authoring guidance will be created": "Select the workspace where CodeTour authoring guidance will be created",
+  "A CodeTour authoring SKILL.md already exists in this workspace.": "A CodeTour authoring SKILL.md already exists in this workspace.",
+  "Open Existing": "Open Existing",
+  "Overwrite": "Overwrite",
+  "Created .tours/SKILL.md.": "Created .tours/SKILL.md.",
+  "Could not create .tours/SKILL.md: {0}": "Could not create .tours/SKILL.md: {0}",
   "Start Tour": "Start Tour",
   "Select the tour to start...": "Select the tour to start...",
   "This workspace contains guided tours that introduce the codebase.": "This workspace contains guided tours that introduce the codebase.",

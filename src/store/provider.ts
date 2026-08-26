@@ -324,7 +324,7 @@ export function registerTourProvider(context: vscode.ExtensionContext) {
     }),
     onDidSaveTour(uri => {
       deletedTourUris.delete(uri.toString());
-      scheduleDiscovery();
+      void discoverTours();
     })
   );
 }

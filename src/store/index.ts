@@ -6,7 +6,7 @@ import { CommentThread, Uri } from "vscode";
 
 export interface CodeTourSymbolPathSegment {
   name: string;
-  kind: number;
+  kind: string | number;
 }
 
 export interface CodeTourSymbolAnchor {

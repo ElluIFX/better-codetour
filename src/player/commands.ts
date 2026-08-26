@@ -7,6 +7,7 @@ import { anchorResolver } from "../anchors";
 import { EXTENSION_NAME } from "../constants";
 import { focusPlayer } from "../player";
 import { saveTour } from "../store/persistence";
+import { discoverTours } from "../store/provider";
 import { CodeTour, store } from "../store";
 import {
   endCurrentCodeTour,
@@ -29,6 +30,10 @@ export function registerPlayerCommands() {
       await vscode.commands.executeCommand(`${EXTENSION_NAME}.tours.focus`);
     }
   );
+
+  vscode.commands.registerCommand(`${EXTENSION_NAME}.refreshTours`, async () => {
+    await discoverTours();
+  });
 
   // This is a "private" command that's used exclusively
   // by the hover description for tour markers.

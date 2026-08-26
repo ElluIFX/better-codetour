@@ -1,4 +1,13 @@
 {
+  "Add a CodeTour step": "添加 CodeTour 步骤",
+  "Describe this step using Markdown": "使用 Markdown 编写步骤说明",
+  "Open a workspace before creating CodeTour authoring guidance.": "请先打开工作区，再创建 CodeTour 编写指引。",
+  "Select the workspace where CodeTour authoring guidance will be created": "选择要创建 CodeTour 编写指引的工作区",
+  "A CodeTour authoring SKILL.md already exists in this workspace.": "此工作区已存在 CodeTour 编写 SKILL.md。",
+  "Open Existing": "打开现有文件",
+  "Overwrite": "覆盖",
+  "Created .tours/SKILL.md.": "已创建 .tours/SKILL.md。",
+  "Could not create .tours/SKILL.md: {0}": "无法创建 .tours/SKILL.md：{0}",
   "Select the tour to start...": "选择要开始的 Tour...",
   "This workspace contains guided tours that introduce the codebase.": "此工作区包含用于介绍代码库的引导式 Tour。",
   "Start CodeTour": "开始 CodeTour",

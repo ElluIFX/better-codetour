@@ -206,6 +206,12 @@
         "icon": "$(list-tree)"
       },
       {
+        "command": "codetour.refreshTours",
+        "title": "%command.refreshTours%",
+        "category": "CodeTour",
+        "icon": "$(refresh)"
+      },
+      {
         "command": "codetour.previewTour",
         "title": "%command.previewTour%",
         "icon": "$(preview)"
@@ -220,6 +226,11 @@
         "title": "%command.recordTour%",
         "category": "CodeTour",
         "icon": "$(add)"
+      },
+      {
+        "command": "codetour.createSkills",
+        "title": "%command.createSkills%",
+        "category": "CodeTour"
       },
       {
         "command": "codetour.resumeTour",
@@ -446,24 +457,29 @@
       ],
       "view/title": [
         {
+          "command": "codetour.refreshTours",
+          "when": "view == codetour.tours",
+          "group": "navigation@1"
+        },
+        {
           "command": "codetour.hideMarkers",
           "when": "view == codetour.tours && codetour:showingMarkers",
-          "group": "navigation@1"
+          "group": "navigation@2"
         },
         {
           "command": "codetour.showMarkers",
           "when": "view == codetour.tours && !codetour:showingMarkers",
-          "group": "navigation@1"
+          "group": "navigation@2"
         },
         {
           "command": "codetour.openTourFile",
           "when": "view == codetour.tours",
-          "group": "navigation@2"
+          "group": "navigation@3"
         },
         {
           "command": "codetour.recordTour",
           "when": "view == codetour.tours",
-          "group": "navigation@3"
+          "group": "navigation@4"
         }
       ],
       "view/item/context": [

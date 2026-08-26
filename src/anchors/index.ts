@@ -66,6 +66,24 @@ function normalizeContent(text: string) {
   return text.replace(/\r\n/g, "\n");
 }
 
+function getSymbolKindName(kind: vscode.SymbolKind) {
+  return vscode.SymbolKind[kind];
+}
+
+function getSymbolKindValue(kind: string | number) {
+  if (typeof kind === "number") {
+    return kind;
+  }
+  const value = (vscode.SymbolKind as unknown as Record<string, number>)[kind];
+  return typeof value === "number" ? value : undefined;
+}
+
+function symbolKindsEqual(left: string | number, right: string | number) {
+  const leftValue = getSymbolKindValue(left);
+  const rightValue = getSymbolKindValue(right);
+  return leftValue !== undefined && leftValue === rightValue;
+}
+
 function getFirstLineRange(document: vscode.TextDocument, range: vscode.Range) {
   return document.lineAt(range.start.line).range;
 }
@@ -78,7 +96,8 @@ function pathsEqual(
     left.length === right.length &&
     left.every(
       (segment, index) =>
-        segment.name === right[index].name && segment.kind === right[index].kind
+        segment.name === right[index].name &&
+        symbolKindsEqual(segment.kind, right[index].kind)
     )
   );
 }
@@ -104,7 +123,10 @@ function flattenDocumentSymbols(
   parentPath: readonly CodeTourSymbolPathSegment[] = []
 ): SymbolCandidate[] {
   return symbols.flatMap(symbol => {
-    const path = [...parentPath, { name: symbol.name, kind: symbol.kind }];
+    const path = [
+      ...parentPath,
+      { name: symbol.name, kind: getSymbolKindName(symbol.kind) }
+    ];
     return [
       {
         path,
@@ -139,7 +161,7 @@ async function getSymbolCandidates(
       visited: Set<vscode.SymbolInformation> = new Set()
     ): CodeTourSymbolPathSegment[] => {
       if (!symbol.containerName || visited.has(symbol)) {
-        return [{ name: symbol.name, kind: symbol.kind }];
+        return [{ name: symbol.name, kind: getSymbolKindName(symbol.kind) }];
       }
       visited.add(symbol);
       const parent = information
@@ -156,7 +178,7 @@ async function getSymbolCandidates(
         )[0];
       return [
         ...(parent ? getInformationPath(parent, visited) : []),
-        { name: symbol.name, kind: symbol.kind }
+        { name: symbol.name, kind: getSymbolKindName(symbol.kind) }
       ];
     };
 
@@ -504,8 +526,10 @@ class TourAnchorResolver implements vscode.Disposable {
         if (
           candidate &&
           candidate.path.length === currentPath.length &&
-          candidate.path[candidate.path.length - 1].kind ===
+          symbolKindsEqual(
+            candidate.path[candidate.path.length - 1].kind,
             currentPath[currentPath.length - 1].kind
+          )
         ) {
           step.anchor.path = candidate.path;
           this.scheduleSave(tour);

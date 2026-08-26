@@ -23,7 +23,6 @@ import {
   window,
   workspace
 } from "vscode";
-import { SMALL_ICON_URL } from "../constants";
 import { anchorResolver } from "../anchors";
 import { CodeTour, store } from "../store";
 import { initializeStorage } from "../store/storage";
@@ -141,8 +140,7 @@ export class CodeTourComment implements Comment {
   public id: string = (++id).toString();
   public contextValue: string = "";
   public author: CommentAuthorInformation = {
-    name: CONTROLLER_LABEL,
-    iconPath: Uri.parse(SMALL_ICON_URL)
+    name: CONTROLLER_LABEL
   };
   public body: MarkdownString;
 
@@ -228,6 +226,10 @@ export async function startPlayer() {
     CONTROLLER_ID,
     CONTROLLER_LABEL
   );
+  controller.options = {
+    prompt: l10n.t("Add a CodeTour step"),
+    placeHolder: l10n.t("Describe this step using Markdown")
+  };
 
   updateCommentingRangeProvider();
 }

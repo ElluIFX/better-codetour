@@ -138,23 +138,23 @@ describe("resilient tour anchors", () => {
       ),
       ["line", "symbol", "content"]
     );
-    assert.strictEqual(
-      schema.definitions.symbolPathSegment.properties.kind.type,
-      "integer"
+    assert.deepStrictEqual(
+      schema.definitions.symbolPathSegment.properties.kind.oneOf.map(
+        (item: any) => item.type
+      ),
+      ["string", "integer"]
     );
     assert.strictEqual(schema.definitions.step.oneOf.length, 5);
   });
 
-  it("partitions selected and line-based gutter commenting ranges", async () => {
+  it("keeps one gutter commenting range while text is selected", async () => {
     const document = await vscode.workspace.openTextDocument(
       vscode.Uri.joinPath(getWorkspaceRoot(), "sample.txt")
     );
-    const selection = new vscode.Selection(0, 1, 1, 2);
-    const ranges = getRecordingCommentingRanges(document, selection);
-    assert.ok(ranges[0].isEqual(selection));
-    assert.strictEqual(ranges.length, 2);
-    assert.strictEqual(ranges[1].start.line, 2);
-    assert.strictEqual(ranges[1].end.line, document.lineCount - 1);
+    const ranges = getRecordingCommentingRanges(document);
+    assert.strictEqual(ranges.length, 1);
+    assert.strictEqual(ranges[0].start.line, 0);
+    assert.strictEqual(ranges[0].end.line, document.lineCount - 1);
   });
 
   it("selects content or line anchors for the corresponding gutter plus", async () => {
@@ -216,7 +216,7 @@ describe("resilient tour anchors", () => {
       description: "outer symbol",
       anchor: {
         type: "symbol",
-        path: [{ name: "alphaBlock", kind: vscode.SymbolKind.Class }]
+        path: [{ name: "alphaBlock", kind: "Class" }]
       }
     });
     const resolution = await anchorResolver.resolveStep(tour, 0);
