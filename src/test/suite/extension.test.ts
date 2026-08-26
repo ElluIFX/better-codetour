@@ -204,6 +204,35 @@ describe("resilient tour anchors", () => {
     await vscode.workspace.fs.stat(
       vscode.Uri.joinPath(getWorkspaceRoot(), ".tours", "schema.json")
     );
+
+    const nestedTourUri = vscode.Uri.joinPath(
+      getWorkspaceRoot(),
+      ".tours",
+      "nested",
+      "nested.tour"
+    );
+    await vscode.workspace.fs.createDirectory(
+      vscode.Uri.joinPath(getWorkspaceRoot(), ".tours", "nested")
+    );
+    await vscode.workspace.fs.writeFile(
+      nestedTourUri,
+      new TextEncoder().encode(JSON.stringify(original))
+    );
+    assert.strictEqual(await migrateTourSchema(nestedTourUri), true);
+    const nestedTour = JSON.parse(
+      new TextDecoder().decode(
+        await vscode.workspace.fs.readFile(nestedTourUri)
+      )
+    );
+    assert.strictEqual(nestedTour.$schema, "./schema.json");
+    await vscode.workspace.fs.stat(
+      vscode.Uri.joinPath(
+        getWorkspaceRoot(),
+        ".tours",
+        "nested",
+        "schema.json"
+      )
+    );
   });
 
   it("persists virtual content edits as decoded text", async () => {

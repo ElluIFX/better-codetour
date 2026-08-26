@@ -8,7 +8,7 @@ import { CodeTour } from ".";
 import { readUriContents } from "../utils";
 
 const REMOTE_SCHEMA = "https://aka.ms/codetour-schema";
-const SCHEMA_DIRECTORY = ".tours";
+const LOCAL_SCHEMA = "./schema.json";
 const SCHEMA_FILE = "schema.json";
 
 let extensionUri: vscode.Uri | undefined;
@@ -35,47 +35,21 @@ function enqueueWrite(
   });
 }
 
-function getWorkspaceSchemaUri(workspaceFolder: vscode.WorkspaceFolder) {
-  return vscode.Uri.joinPath(
-    workspaceFolder.uri,
-    SCHEMA_DIRECTORY,
-    SCHEMA_FILE
-  );
-}
-
-function normalizeDriveLetter(uriPath: string) {
-  return uriPath.replace(/^\/([A-Z]):/, (_, drive: string) =>
-    `/${drive.toLocaleLowerCase()}:`
-  );
-}
-
 export function getTourSchemaReference(tourUri: vscode.Uri): string {
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(tourUri);
   if (!workspaceFolder) {
     return REMOTE_SCHEMA;
   }
 
-  const schemaUri = getWorkspaceSchemaUri(workspaceFolder);
-  let relative = path.posix.relative(
-    path.posix.dirname(normalizeDriveLetter(tourUri.path)),
-    normalizeDriveLetter(schemaUri.path)
-  );
-  if (!relative.startsWith(".")) {
-    relative = `./${relative}`;
-  }
-
-  return relative;
+  return LOCAL_SCHEMA;
 }
 
-export async function ensureWorkspaceSchema(
-  workspaceFolder: vscode.WorkspaceFolder
-): Promise<void> {
+async function ensureSchema(targetUri: vscode.Uri): Promise<void> {
   if (!extensionUri) {
     return;
   }
 
   const sourceUri = vscode.Uri.joinPath(extensionUri, SCHEMA_FILE);
-  const targetUri = getWorkspaceSchemaUri(workspaceFolder);
   const source = await vscode.workspace.fs.readFile(sourceUri);
 
   try {
@@ -88,7 +62,7 @@ export async function ensureWorkspaceSchema(
     }
   } catch {
     await vscode.workspace.fs.createDirectory(
-      vscode.Uri.joinPath(workspaceFolder.uri, SCHEMA_DIRECTORY)
+      targetUri.with({ path: path.posix.dirname(targetUri.path) })
     );
   }
 
@@ -97,13 +71,20 @@ export async function ensureWorkspaceSchema(
   );
 }
 
+function ensureTourSchema(tourUri: vscode.Uri): Promise<void> {
+  const targetUri = tourUri.with({
+    path: path.posix.join(path.posix.dirname(tourUri.path), SCHEMA_FILE)
+  });
+  return ensureSchema(targetUri);
+}
+
 export async function migrateTourSchema(tourUri: vscode.Uri): Promise<boolean> {
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(tourUri);
   if (!workspaceFolder || tourUri.scheme !== workspaceFolder.uri.scheme) {
     return false;
   }
 
-  await ensureWorkspaceSchema(workspaceFolder);
+  await ensureTourSchema(tourUri);
   const source = await readUriContents(tourUri);
   const schemaReference = getTourSchemaReference(tourUri);
   const edits = modify(source, ["$schema"], schemaReference, {
@@ -142,7 +123,7 @@ export async function saveTour(tour: CodeTour): Promise<void> {
   const uri = vscode.Uri.parse(tour.id);
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
   if (workspaceFolder) {
-    await ensureWorkspaceSchema(workspaceFolder);
+    await ensureTourSchema(uri);
   }
 
   const persistedTour = {
