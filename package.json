@@ -3,7 +3,7 @@
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
   "publisher": "ElluIFX",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "author": {
     "name": "ElluIFX",
     "url": "https://github.com/ElluIFX"
@@ -17,7 +17,6 @@
   },
   "homepage": "https://github.com/ElluIFX/better-codetour#readme",
   "license": "MIT",
-  "icon": "images/icon.png",
   "engines": {
     "vscode": "^1.73.0"
   },

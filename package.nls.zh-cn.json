@@ -36,7 +36,7 @@
   "command.previewTour": "预览 Tour",
   "command.previous": "上一步",
   "command.recordTour": "录制 Tour",
-  "command.createSkills": "CCreate Skills",
+  "command.createSkills": "创建 CodeTour Skills",
   "command.resumeTour": "继续 Tour",
   "command.saveStep": "保存步骤",
   "command.showMarkers": "显示 Tour 标记",

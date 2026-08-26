@@ -131,12 +131,6 @@ function clearDecorations(editor: vscode.TextEditor) {
 
 export async function registerDecorators(context: vscode.ExtensionContext) {
   tourDecorator = vscode.window.createTextEditorDecorationType({
-    gutterIconPath: vscode.Uri.joinPath(
-      context.extensionUri,
-      "images",
-      "icon.png"
-    ),
-    gutterIconSize: "contain",
     overviewRulerColor: "rgb(246,232,154)",
     overviewRulerLane: vscode.OverviewRulerLane.Right,
     rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed

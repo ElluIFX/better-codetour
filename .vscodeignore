@@ -13,3 +13,5 @@ webpack.config.js
 .git/**
 .github/**
 **/*.svg
+images/icon.png
+images/icon-small.png
