@@ -5,9 +5,7 @@ import { applyEdits, modify } from "jsonc-parser";
 import * as path from "path";
 import * as vscode from "vscode";
 import { CodeTour } from ".";
-import { normalizeSymbolKind } from "../symbolKind";
 import { readUriContents } from "../utils";
-import { isWritableTourUri } from "./editability";
 
 const LOCAL_SCHEMA = "./schema.json";
 const SCHEMA_FILE = "schema.json";
@@ -60,24 +58,7 @@ async function ensureSchema(targetUri: vscode.Uri): Promise<void> {
     ) {
       return;
     }
-    throw new Error(
-      vscode.l10n.t(
-        "A different schema.json already exists beside this CodeTour. Choose another directory or resolve the schema conflict."
-      )
-    );
   } catch {
-    try {
-      await vscode.workspace.fs.stat(targetUri);
-      throw new Error(
-        vscode.l10n.t(
-          "A different schema.json already exists beside this CodeTour. Choose another directory or resolve the schema conflict."
-        )
-      );
-    } catch (error) {
-      if (!(error instanceof vscode.FileSystemError)) {
-        throw error;
-      }
-    }
     await vscode.workspace.fs.createDirectory(
       targetUri.with({ path: path.posix.dirname(targetUri.path) })
     );
@@ -97,11 +78,7 @@ export function ensureTourSchema(tourUri: vscode.Uri): Promise<void> {
 
 export async function migrateTourSchema(tourUri: vscode.Uri): Promise<boolean> {
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(tourUri);
-  if (
-    !workspaceFolder ||
-    tourUri.scheme !== workspaceFolder.uri.scheme ||
-    !isWritableTourUri(tourUri)
-  ) {
+  if (!workspaceFolder || tourUri.scheme !== workspaceFolder.uri.scheme) {
     return false;
   }
 
@@ -140,35 +117,11 @@ export async function migrateTourSchemas(tours: readonly CodeTour[]) {
   });
 }
 
-export function normalizeTourSymbolKinds(tour: CodeTour): CodeTour {
-  return {
-    ...tour,
-    steps: tour.steps.map(step => {
-      if (step.anchor?.type !== "symbol") {
-        return step;
-      }
-
-      return {
-        ...step,
-        anchor: {
-          ...step.anchor,
-          path: step.anchor.path.map(segment => ({
-            ...segment,
-            kind: normalizeSymbolKind(segment.kind) || segment.kind
-          }))
-        }
-      };
-    })
-  };
-}
-
 export async function saveTour(tour: CodeTour): Promise<void> {
   const uri = vscode.Uri.parse(tour.id);
-  if (!isWritableTourUri(uri)) {
-    throw new Error(vscode.l10n.t("This CodeTour source is read-only."));
-  }
-  const normalizedTour = normalizeTourSymbolKinds(tour);
-  const { $schema: _schema, id: _id, ...tourData } = normalizedTour;
+  await ensureTourSchema(uri);
+
+  const { $schema: _schema, id: _id, ...tourData } = tour;
   const persistedTour = {
     $schema: getTourSchemaReference(uri),
     ...tourData
@@ -177,7 +130,6 @@ export async function saveTour(tour: CodeTour): Promise<void> {
   const bytes = new TextEncoder().encode(
     JSON.stringify(persistedTour, null, 2)
   );
-  await ensureTourSchema(uri);
   await enqueueWrite(uri, () => vscode.workspace.fs.writeFile(uri, bytes));
   didSaveTourEmitter.fire(uri);
 }

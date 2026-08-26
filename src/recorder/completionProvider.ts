@@ -66,7 +66,7 @@ class CodeTourCompletionProvider implements vscode.CompletionItemProvider {
 }
 
 export function registerCompletionProvider() {
-  return vscode.languages.registerCompletionItemProvider(
+  vscode.languages.registerCompletionItemProvider(
     { scheme: "comment" },
     new CodeTourCompletionProvider(),
     ":"

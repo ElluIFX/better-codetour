@@ -4,13 +4,19 @@
 import { reaction } from "mobx";
 import * as vscode from "vscode";
 import { anchorResolver } from "../anchors";
-import { FS_SCHEME_CONTENT } from "../constants";
+import { FS_SCHEME_CONTENT, ICON_URL } from "../constants";
 import { CodeTourStepTuple, store } from "../store";
 import { getStepFileUri, getWorkspaceUri } from "../utils";
 
 const DISABLED_SCHEMES = [FS_SCHEME_CONTENT, "comment"];
 
-let tourDecorator: vscode.TextEditorDecorationType | undefined;
+const TOUR_DECORATOR = vscode.window.createTextEditorDecorationType({
+  gutterIconPath: vscode.Uri.parse(ICON_URL),
+  gutterIconSize: "contain",
+  overviewRulerColor: "rgb(246,232,154)",
+  overviewRulerLane: vscode.OverviewRulerLane.Right,
+  rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed
+});
 
 export async function getTourSteps(
   editor: vscode.TextEditor
@@ -98,9 +104,6 @@ export async function updateDecorations(
   editor: vscode.TextEditor | undefined = vscode.window.activeTextEditor
 ) {
   const generation = ++decorationGeneration;
-  if (!tourDecorator) {
-    return;
-  }
   if (!editor || DISABLED_SCHEMES.includes(editor.document.uri.scheme)) {
     if (editor) {
       clearDecorations(editor);
@@ -124,30 +127,15 @@ export async function updateDecorations(
   const ranges = store.activeEditorSteps!.map(
     ([, , , line]) => new vscode.Range(line!, 0, line!, 1000)
   );
-  editor.setDecorations(tourDecorator, ranges);
+  editor.setDecorations(TOUR_DECORATOR, ranges);
 }
 
 function clearDecorations(editor: vscode.TextEditor) {
   store.activeEditorSteps = undefined;
-  if (tourDecorator) {
-    editor.setDecorations(tourDecorator, []);
-  }
+  editor.setDecorations(TOUR_DECORATOR, []);
 }
 
 export async function registerDecorators(context: vscode.ExtensionContext) {
-  tourDecorator?.dispose();
-  const decorator = vscode.window.createTextEditorDecorationType({
-    gutterIconPath: vscode.Uri.joinPath(
-      context.extensionUri,
-      "images",
-      "icon.png"
-    ),
-    gutterIconSize: "contain",
-    overviewRulerColor: "rgb(246,232,154)",
-    overviewRulerLane: vscode.OverviewRulerLane.Right,
-    rangeBehavior: vscode.DecorationRangeBehavior.ClosedClosed
-  });
-  tourDecorator = decorator;
   const disposeReaction = reaction(
     () => [
       store.showMarkers,
@@ -187,7 +175,6 @@ export async function registerDecorators(context: vscode.ExtensionContext) {
 
   context.subscriptions.push(
     { dispose: disposeReaction },
-    decorator,
     vscode.window.onDidChangeActiveTextEditor(editor => {
       if (editor && store.showMarkers) {
         void updateDecorations(editor);
@@ -214,9 +201,6 @@ export async function registerDecorators(context: vscode.ExtensionContext) {
     {
       dispose() {
         hoverProviderDisposable?.dispose();
-        if (tourDecorator === decorator) {
-          tourDecorator = undefined;
-        }
       }
     }
   );

@@ -17,17 +17,14 @@ import {
   Range,
   Selection,
   TextDocument,
-  TextEditor,
-  TextEditorDecorationType,
-  TextEditorSelectionChangeKind,
   TextEditorRevealType,
   Uri,
   window,
   workspace
 } from "vscode";
+import { SMALL_ICON_URL } from "../constants";
 import { anchorResolver } from "../anchors";
 import { CodeTour, store } from "../store";
-import { setActiveThreadAvailable } from "../store/actions";
 import { initializeStorage } from "../store/storage";
 import {
   getActiveTourNumber,
@@ -58,7 +55,7 @@ const COMMAND_PATTERN =
 const TOUR_REFERENCE_PATTERN =
   /(?:\[(?<linkTitle>[^\]]+)\])?\[(?=\s*[^\]\s])(?<tourTitle>[^\]#]+)?(?:#(?<stepNumber>\d+))?\](?!\()/gm;
 const FILE_REFERENCE_PATTERN = /(\!)?(\[[^\]]+\]\()(\.[^\)]+)(?=\))/gm;
-const CODE_FENCE_PATTERN = /```[^\r\n]*\r?\n([\s\S]*?)\r?\n```/g;
+const CODE_FENCE_PATTERN = /```[^\n]+\n(.+)\n```/gms;
 
 export function generatePreviewContent(
   content: string,
@@ -143,96 +140,32 @@ export class CodeTourComment implements Comment {
   public id: string = (++id).toString();
   public contextValue: string = "";
   public author: CommentAuthorInformation = {
-    name: CONTROLLER_LABEL
+    name: CONTROLLER_LABEL,
+    iconPath: Uri.parse(SMALL_ICON_URL)
   };
   public body: MarkdownString;
-  public savedBody: string;
 
   constructor(
     content: string,
     public label: string = "",
     public parent: CommentThread,
-    public mode: CommentMode,
-    savedBody: string = content
+    public mode: CommentMode
   ) {
     const body =
       mode === CommentMode.Preview ? generatePreviewContent(content) : content;
 
     this.body = new MarkdownString(body);
     this.body.isTrusted = true;
-    this.savedBody = savedBody;
   }
 }
 
 let controller: CommentController | null;
 let renderGeneration = 0;
 let lastUnresolvedNotice: string | undefined;
-let contentSelectionDecorator: TextEditorDecorationType | undefined;
-const recordingSelections = new Map<string, Selection>();
-
-export function getRecordingSelection(uri: Uri, line: number) {
-  const key = uri.toString();
-  const selection = recordingSelections.get(key);
-  recordingSelections.delete(key);
-  if (!selection || selection.isEmpty) {
-    return;
-  }
-  const endLine =
-    selection.end.character === 0 && selection.end.line > selection.start.line
-      ? selection.end.line - 1
-      : selection.end.line;
-  return line >= selection.start.line && line <= endLine
-    ? selection
-    : undefined;
-}
-
-function updateRecordingSelection(
-  editor: TextEditor,
-  changeKind?: TextEditorSelectionChangeKind
-) {
-  if (!contentSelectionDecorator) {
-    return;
-  }
-  const key = editor.document.uri.toString();
-  if (!store.isRecording) {
-    recordingSelections.delete(key);
-    editor.setDecorations(contentSelectionDecorator, []);
-    return;
-  }
-  if (editor.selection.isEmpty) {
-    const cachedSelection = recordingSelections.get(key);
-    if (
-      changeKind === TextEditorSelectionChangeKind.Mouse &&
-      cachedSelection?.contains(editor.selection.active)
-    ) {
-      editor.setDecorations(contentSelectionDecorator, [cachedSelection]);
-    } else {
-      recordingSelections.delete(key);
-      editor.setDecorations(contentSelectionDecorator, []);
-    }
-    return;
-  }
-  recordingSelections.set(key, editor.selection);
-  const endLine =
-    editor.selection.end.character === 0 && editor.selection.end.line > 0
-      ? editor.selection.end.line - 1
-      : editor.selection.end.line;
-  const range = new Range(
-    editor.selection.start.line,
-    0,
-    endLine,
-    editor.document.lineAt(endLine).range.end.character
-  );
-  editor.setDecorations(contentSelectionDecorator, [range]);
-}
 
 export async function focusPlayer() {
-  const currentThread = store.activeTour?.thread;
-  if (!currentThread) {
-    await commands.executeCommand("codetour.openCodeTourPanel");
-    return;
-  }
-  await showDocument(currentThread.uri, currentThread.range);
+  const currentThread = store.activeTour!.thread!;
+  showDocument(currentThread.uri, currentThread.range);
 }
 
 export function getRecordingCommentingRanges(
@@ -306,7 +239,6 @@ export async function startPlayer() {
     CONTROLLER_ID,
     CONTROLLER_LABEL
   );
-  setActiveThreadAvailable(false);
 
   updateCommentingRangeProvider();
 }
@@ -320,13 +252,6 @@ export async function stopPlayer() {
   }
   if (store.activeTour) {
     store.activeTour.thread = null;
-  }
-  setActiveThreadAvailable(false);
-  recordingSelections.clear();
-  if (contentSelectionDecorator) {
-    window.visibleTextEditors.forEach(editor =>
-      editor.setDecorations(contentSelectionDecorator!, [])
-    );
   }
 }
 
@@ -350,8 +275,7 @@ const VIEW_COMMANDS = new Map([
 ]);
 
 function getPreviousTour(): CodeTour | undefined {
-  const tours = store.activeTour?.tours || store.tours;
-  const previousTour = tours.find(
+  const previousTour = store.tours.find(
     tour => tour.nextTour === store.activeTour?.tour.title
   );
 
@@ -362,23 +286,22 @@ function getPreviousTour(): CodeTour | undefined {
   const match = store.activeTour?.tour.title.match(/^#?(\d+)\s+-/);
   if (match) {
     const previousTourNumber = Number(match[1]) - 1;
-    return tours.find(tour =>
+    return store.tours.find(tour =>
       tour.title.match(new RegExp(`^#?${previousTourNumber}\\s+[-:]`))
     );
   }
 }
 
 function getNextTour(): CodeTour | undefined {
-  const tours = store.activeTour?.tours || store.tours;
   if (store.activeTour?.tour.nextTour) {
-    return tours.find(
+    return store.tours.find(
       tour => tour.title === store.activeTour?.tour.nextTour
     );
   } else {
     const tourNumber = getActiveTourNumber();
     if (tourNumber) {
       const nextTourNumber = tourNumber + 1;
-      return tours.find(tour =>
+      return store.tours.find(tour =>
         tour.title.match(new RegExp(`^#?${nextTourNumber}\\s+[-:]`))
       );
     }
@@ -392,16 +315,12 @@ async function renderCurrentStep() {
 
   const step = currentTour!.steps[currentStep];
   if (!step) {
-    store.activeTour!.thread?.dispose();
-    store.activeTour!.thread = null;
-    setActiveThreadAvailable(false);
     return;
   }
 
   if (step.file && !step.anchor) {
     store.activeTour!.thread?.dispose();
     store.activeTour!.thread = null;
-    setActiveThreadAvailable(false);
     void window.showWarningMessage(
       l10n.t(
         "This CodeTour file step has no anchor. Edit the tour and bind the step before playing it."
@@ -433,7 +352,6 @@ async function renderCurrentStep() {
   if (step.anchor && anchorResolution?.state !== "resolved") {
     store.activeTour.thread?.dispose();
     store.activeTour.thread = null;
-    setActiveThreadAvailable(false);
     const noticeKey = `${currentTour.id}#${currentStep}#${anchorResolution?.state}`;
     if (lastUnresolvedNotice !== noticeKey) {
       lastUnresolvedNotice = noticeKey;
@@ -505,10 +423,6 @@ async function renderCurrentStep() {
     return;
   }
 
-  if (!controller) {
-    return;
-  }
-
   const range = anchorResolution?.range || new Range(line!, 0, line!, 0);
   let label = l10n.t(
     "Step #{0} of {1}",
@@ -522,8 +436,7 @@ async function renderCurrentStep() {
   }
 
   store.activeTour!.thread?.dispose();
-  store.activeTour!.thread = controller.createCommentThread(uri, range, []);
-  setActiveThreadAvailable(true);
+  store.activeTour!.thread = controller!.createCommentThread(uri, range, []);
 
   const mode =
     store.isRecording && store.isEditing
@@ -607,8 +520,7 @@ async function renderCurrentStep() {
     content,
     label,
     store.activeTour!.thread!,
-    mode,
-    step.description
+    mode
   );
 
   // @ts-ignore
@@ -698,16 +610,7 @@ async function showDocument(uri: Uri, range: Range, selection?: Selection) {
 }
 
 export function registerPlayerModule(context: ExtensionContext) {
-  contentSelectionDecorator = window.createTextEditorDecorationType({
-    gutterIconPath: Uri.joinPath(
-      context.extensionUri,
-      "images",
-      "add-content.svg"
-    ),
-    gutterIconSize: "contain",
-    isWholeLine: true
-  });
-  registerPlayerCommands(context);
+  registerPlayerCommands();
   registerTreeProvider(context);
   registerFileSystemProvider(context);
   registerTextDocumentContentProvider(context);
@@ -718,9 +621,8 @@ export function registerPlayerModule(context: ExtensionContext) {
   initializeStorage(context);
 
   context.subscriptions.push(
-    window.onDidChangeTextEditorSelection(event => {
+    window.onDidChangeTextEditorSelection(() => {
       if (store.isRecording) {
-        updateRecordingSelection(event.textEditor, event.kind);
         updateCommentingRangeProvider();
       }
     }),
@@ -747,12 +649,6 @@ export function registerPlayerModule(context: ExtensionContext) {
       }
     })
   );
-  context.subscriptions.push(contentSelectionDecorator, {
-    dispose() {
-      contentSelectionDecorator = undefined;
-      recordingSelections.clear();
-    }
-  });
 
   // Watch for changes to the active tour property,
   // and automatically re-render the current step in response.
@@ -761,8 +657,6 @@ export function registerPlayerModule(context: ExtensionContext) {
       store.activeTour
         ? [
             store.activeTour.step,
-            store.isRecording,
-            store.isEditing,
             store.activeTour.tour.title,
             store.activeTour.tour.steps.map(step => [
               step.title,
@@ -776,10 +670,7 @@ export function registerPlayerModule(context: ExtensionContext) {
     ],
     () => {
       if (store.activeTour) {
-        window.visibleTextEditors.forEach(updateRecordingSelection);
         void renderCurrentStep();
-      } else {
-        window.visibleTextEditors.forEach(updateRecordingSelection);
       }
     }
   );

@@ -54,45 +54,9 @@
           "description": "Symbol name reported by the document symbol provider."
         },
         "kind": {
-          "description": "Canonical VS Code SymbolKind name. Integer values are accepted for compatibility and normalized on save.",
-          "oneOf": [
-            {
-              "type": "string",
-              "enum": [
-                "File",
-                "Module",
-                "Namespace",
-                "Package",
-                "Class",
-                "Method",
-                "Property",
-                "Field",
-                "Constructor",
-                "Enum",
-                "Interface",
-                "Function",
-                "Variable",
-                "Constant",
-                "String",
-                "Number",
-                "Boolean",
-                "Array",
-                "Object",
-                "Key",
-                "Null",
-                "EnumMember",
-                "Struct",
-                "Event",
-                "Operator",
-                "TypeParameter"
-              ]
-            },
-            {
-              "type": "integer",
-              "minimum": 0,
-              "maximum": 25
-            }
-          ]
+          "type": "integer",
+          "minimum": 0,
+          "description": "VS Code SymbolKind value."
         }
       }
     },

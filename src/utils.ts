@@ -26,16 +26,15 @@ export function getStepLabel(
   } else if (defaultToFileName) {
     label = step.uri
       ? step.uri!
-      : step.directory || step.file!;
+      : decodeURIComponent(step.directory || step.file!);
   }
 
   return `${prefix}${label}`;
 }
 
 export function getTourTitle(tour: CodeTour) {
-  const numberedPrefix = tour.title.match(/^#?\d+\s+-\s*/);
-  if (numberedPrefix) {
-    return tour.title.slice(numberedPrefix[0].length).trim();
+  if (tour.title.match(/^#?\d+\s-/)) {
+    return tour.title.split("-")[1].trim();
   }
 
   return tour.title;

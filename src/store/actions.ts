@@ -14,7 +14,6 @@ import {
 import { CodeTour, store } from ".";
 import { EXTENSION_NAME, FS_SCHEME, FS_SCHEME_CONTENT } from "../constants";
 import { refreshCommentingRanges, startPlayer, stopPlayer } from "../player";
-import { commitActiveTourEdit } from "../recorder/editSession";
 import {
   getStepFileUri,
   getWorkspaceKey,
@@ -22,18 +21,11 @@ import {
   readUriContents
 } from "../utils";
 import { progress } from "./storage";
-import {
-  ensureTourSchema,
-  getTourSchemaReference,
-  normalizeTourSymbolKinds
-} from "./persistence";
-import { parseCodeTour } from "./validation";
-import { isWritableTourSource, isWritableTourUri } from "./editability";
+import { ensureTourSchema, getTourSchemaReference } from "./persistence";
 
 const CAN_EDIT_TOUR_KEY = `${EXTENSION_NAME}:canEditTour`;
 const IN_TOUR_KEY = `${EXTENSION_NAME}:inTour`;
 const RECORDING_KEY = `${EXTENSION_NAME}:recording`;
-const HAS_ACTIVE_THREAD_KEY = `${EXTENSION_NAME}:hasActiveThread`;
 export const EDITING_KEY = `${EXTENSION_NAME}:isEditing`;
 
 const _onDidEndTour = new EventEmitter<CodeTour>();
@@ -45,17 +37,10 @@ export const onDidStartTour = _onDidStartTour.event;
 export async function startCodeTourByUri(tourUri: Uri, stepNumber?: number) {
   const bytes = await workspace.fs.readFile(tourUri);
   const contents = new TextDecoder().decode(bytes);
-  const tour = parseCodeTour(contents, tourUri.toString());
+  const tour = JSON.parse(contents);
+  tour.id = tourUri.toString();
 
-  if (await commitActiveTourEdit()) {
-    startCodeTour(
-      tour,
-      stepNumber,
-      undefined,
-      false,
-      isWritableTourUri(tourUri)
-    );
-  }
+  startCodeTour(tour, stepNumber);
 }
 
 export function startCodeTour(
@@ -73,22 +58,11 @@ export function startCodeTour(
     workspaceRoot = getWorkspaceUri(tour);
   }
 
-  const requestedStep =
-    stepNumber !== undefined && Number.isFinite(stepNumber)
-      ? Math.trunc(stepNumber)
-      : undefined;
-  const step = tour.steps.length
-    ? requestedStep !== undefined
-      ? Math.min(
-          Math.max(requestedStep, 0),
-          Math.max(tour.steps.length - 1, 0)
-        )
-      : 0
-    : -1;
+  const step =
+    stepNumber !== undefined ? stepNumber : tour.steps.length ? 0 : -1;
   store.activeTour = {
     tour,
     step,
-    canEditTour,
     workspaceRoot,
     thread: null,
     tours
@@ -96,14 +70,12 @@ export function startCodeTour(
 
   commands.executeCommand("setContext", IN_TOUR_KEY, true);
   commands.executeCommand("setContext", CAN_EDIT_TOUR_KEY, canEditTour);
-  commands.executeCommand("setContext", HAS_ACTIVE_THREAD_KEY, false);
 
-  store.isRecording = startInEditMode;
-  store.isEditing = startInEditMode && step >= 0;
-  commands.executeCommand("setContext", RECORDING_KEY, store.isRecording);
-  commands.executeCommand("setContext", EDITING_KEY, store.isEditing);
-
-  if (store.isRecording) {
+  if (startInEditMode) {
+    store.isRecording = true;
+    store.isEditing = true;
+    commands.executeCommand("setContext", RECORDING_KEY, true);
+    commands.executeCommand("setContext", EDITING_KEY, true);
     refreshCommentingRanges();
   } else if (fireEvent) {
     _onDidStartTour.fire([tour, step]);
@@ -122,22 +94,7 @@ export async function selectTour(
   }));
 
   if (items.length === 1) {
-    const tour = items[0].tour as CodeTour;
-    if (
-      store.activeTour?.tour.id !== tour.id
-        ? !(await endCurrentCodeTour())
-        : !(await commitActiveTourEdit())
-    ) {
-      return false;
-    }
-    startCodeTour(
-      tour,
-      step,
-      workspace.getWorkspaceFolder(Uri.parse(tour.id))?.uri || workspaceRoot,
-      false,
-      isTourEditable(tour),
-      tours
-    );
+    startCodeTour(items[0].tour, step, workspaceRoot, false, true, tours);
     return true;
   }
 
@@ -146,22 +103,7 @@ export async function selectTour(
   });
 
   if (response) {
-    if (
-      store.activeTour?.tour.id !== response.tour.id
-        ? !(await endCurrentCodeTour())
-        : !(await commitActiveTourEdit())
-    ) {
-      return false;
-    }
-    startCodeTour(
-      response.tour,
-      step,
-      workspace.getWorkspaceFolder(Uri.parse(response.tour.id))?.uri ||
-        workspaceRoot,
-      false,
-      isTourEditable(response.tour),
-      tours
-    );
+    startCodeTour(response.tour, step, workspaceRoot, false, true, tours);
     return true;
   }
 
@@ -170,29 +112,23 @@ export async function selectTour(
 
 export async function endCurrentCodeTour(fireEvent: boolean = true) {
   if (!store.activeTour) {
-    return true;
-  }
-  if (!(await commitActiveTourEdit())) {
-    void window.showWarningMessage(
-      l10n.t("Save or cancel the current CodeTour step edit first.")
-    );
-    return false;
+    return;
   }
   if (fireEvent) {
     _onDidEndTour.fire(store.activeTour!.tour);
   }
 
-  store.isRecording = false;
-  store.isEditing = false;
-  commands.executeCommand("setContext", RECORDING_KEY, false);
-  commands.executeCommand("setContext", EDITING_KEY, false);
+  if (store.isRecording) {
+    store.isRecording = false;
+    store.isEditing = false;
+    commands.executeCommand("setContext", RECORDING_KEY, false);
+    commands.executeCommand("setContext", EDITING_KEY, false);
+  }
 
   stopPlayer();
 
   store.activeTour = null;
   commands.executeCommand("setContext", IN_TOUR_KEY, false);
-  commands.executeCommand("setContext", CAN_EDIT_TOUR_KEY, false);
-  commands.executeCommand("setContext", HAS_ACTIVE_THREAD_KEY, false);
 
   window.visibleTextEditors.forEach(editor => {
     if (
@@ -202,14 +138,10 @@ export async function endCurrentCodeTour(fireEvent: boolean = true) {
       editor.hide();
     }
   });
-  return true;
 }
 
-export async function moveCurrentCodeTourBackward() {
+export function moveCurrentCodeTourBackward() {
   if (!store.activeTour || store.activeTour.step <= 0) {
-    return;
-  }
-  if (!(await commitActiveTourEdit())) {
     return;
   }
   --store.activeTour.step;
@@ -224,22 +156,11 @@ export async function moveCurrentCodeTourForward() {
   ) {
     return;
   }
-  if (!(await commitActiveTourEdit())) {
-    return;
-  }
   await progress.update();
 
   store.activeTour!.step++;
 
   _onDidStartTour.fire([store.activeTour!.tour, store.activeTour!.step]);
-}
-
-export function setActiveThreadAvailable(available: boolean) {
-  void commands.executeCommand("setContext", HAS_ACTIVE_THREAD_KEY, available);
-}
-
-export function isTourEditable(tour: CodeTour) {
-  return isWritableTourSource(tour);
 }
 
 async function isCodeSwingWorkspace(uri: Uri) {
@@ -304,22 +225,7 @@ export async function startDefaultTour(
     tours.find(tour => tour.title.match(/^#?1\s+-/));
 
   if (primaryTour) {
-    if (
-      store.activeTour?.tour.id !== primaryTour.id
-        ? !(await endCurrentCodeTour())
-        : !(await commitActiveTourEdit())
-    ) {
-      return false;
-    }
-    startCodeTour(
-      primaryTour,
-      step,
-      workspace.getWorkspaceFolder(Uri.parse(primaryTour.id))?.uri ||
-        workspaceRoot,
-      false,
-      isTourEditable(primaryTour),
-      tours
-    );
+    startCodeTour(primaryTour, step, workspaceRoot, false, undefined, tours);
     return true;
   } else {
     return selectTour(tours, workspaceRoot, step);
@@ -328,9 +234,7 @@ export async function startDefaultTour(
 
 export async function exportTour(tour: CodeTour, targetUri: Uri) {
   await ensureTourSchema(targetUri);
-  const normalizedTour = normalizeTourSymbolKinds(tour);
-  const { $schema: _schema, id: _id, ref: _ref, ...tourData } =
-    normalizedTour;
+  const { $schema: _schema, id: _id, ref: _ref, ...tourData } = tour;
   const newTour: Partial<CodeTour> = {
     $schema: getTourSchemaReference(targetUri),
     ...tourData
@@ -343,13 +247,7 @@ export async function exportTour(tour: CodeTour, targetUri: Uri) {
           return step;
         }
 
-        const activeTour = store.activeTour;
-        const workspaceRoot =
-          activeTour &&
-          (activeTour.tour.id === tour.id ||
-            activeTour.tours?.some(candidate => candidate.id === tour.id))
-            ? activeTour.workspaceRoot
-            : getWorkspaceUri(tour);
+        const workspaceRoot = getWorkspaceUri(tour);
         const stepFileUri = await getStepFileUri(
           step,
           workspaceRoot,
