@@ -1,5 +1,5 @@
 {
-  "extension.displayName": "CodeTour",
+  "extension.displayName": "Better-CodeTour",
   "extension.description": "直接在 VS Code 中录制并播放代码库导览。",
   "configuration.title": "CodeTour",
   "configuration.promptForWorkspaceTours": "首次打开包含 Tour 的工作区时显示通知。",

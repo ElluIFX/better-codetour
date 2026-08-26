@@ -135,7 +135,7 @@ export function registerRecorderCommands() {
         : path.basename(title.path).replace(".tour", "");
 
     const tour = {
-      id: decodeURIComponent(uri.toString()),
+      id: uri.toString(),
       title: tourTitle,
       steps: []
     } as CodeTour;
@@ -271,7 +271,7 @@ export function registerRecorderCommands() {
         }
 
         const disposeEndTourHandler = onDidEndTour(async tour => {
-          if (tour.id === decodeURIComponent(uri.toString())) {
+          if (tour.id === uri.toString()) {
             disposeEndTourHandler.dispose();
 
             if (
@@ -429,34 +429,34 @@ export function registerRecorderCommands() {
       }
 
       if (!step.anchor) {
-      const mode = vscode.workspace
-        .getConfiguration("codetour")
-        .get("recordMode");
+        const mode = vscode.workspace
+          .getConfiguration("codetour")
+          .get("recordMode");
 
-      if (mode === "pattern") {
-        const editor = getEditorForUri(thread!.uri);
-        const contents = editor?.document
-          .lineAt(thread.range.start.line)
-          .text.trim();
+        if (mode === "pattern") {
+          const editor = getEditorForUri(thread!.uri);
+          const contents = editor?.document
+            .lineAt(thread.range.start.line)
+            .text.trim();
 
-        const pattern =
-          "^[^\\S\\n]*" + contents!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-        const match = editor?.document
-          .getText()
-          .match(new RegExp(pattern, "gm"));
+          const pattern =
+            "^[^\\S\\n]*" +
+            contents!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+          const match = editor?.document
+            .getText()
+            .match(new RegExp(pattern, "gm"));
 
-        // If the selected line isn't empty, and it's associated
-        // pattern only matches a single line, then use it. Otherwise,
-        // we have to fall back to the line number.
-        if (contents && match && match.length === 1) {
-          step.pattern = pattern;
+          // If the selected line isn't empty, and its associated
+          // pattern only matches a single line, then use it. Otherwise,
+          // fall back to the line number.
+          if (contents && match && match.length === 1) {
+            step.pattern = pattern;
+          } else {
+            step.line = thread.range.start.line + 1;
+          }
         } else {
-          // TODO: Try to get smarter about how to handle this.
           step.line = thread.range.start.line + 1;
         }
-      } else {
-        step.line = thread.range.start.line + 1;
-      }
       }
 
       store.activeTour!.step++;
@@ -466,7 +466,7 @@ export function registerRecorderCommands() {
       tour.steps.splice(stepNumber, 0, step);
 
       store.isEditing = false;
-      vscode.commands.executeCommand("setContext", EDITING_KEY, false);
+      await vscode.commands.executeCommand("setContext", EDITING_KEY, false);
 
       await saveTour(tour);
       if (step.anchor) {
@@ -659,7 +659,7 @@ export function registerRecorderCommands() {
     `${EXTENSION_NAME}.previewTour`,
     async (node: CodeTourNode | vscode.CommentThread) => {
       store.isEditing = false;
-      vscode.commands.executeCommand("setContext", EDITING_KEY, false);
+      await vscode.commands.executeCommand("setContext", EDITING_KEY, false);
       await vscode.commands.executeCommand(
         "setContext",
         "codetour:recording",
@@ -722,7 +722,7 @@ export function registerRecorderCommands() {
       });
 
       store.isEditing = false;
-      vscode.commands.executeCommand("setContext", EDITING_KEY, false);
+      await vscode.commands.executeCommand("setContext", EDITING_KEY, false);
       await saveTour(store.activeTour!.tour);
     }
   );

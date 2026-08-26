@@ -4,12 +4,17 @@
 import * as assert from "assert";
 import * as vscode from "vscode";
 import { anchorResolver } from "../../anchors";
+import { CodeTourFileSystemProvider } from "../../player/fileSystem";
 import { CodeTour, store } from "../../store";
 import {
   getTourSchemaReference,
   initializeTourPersistence,
   migrateTourSchema
 } from "../../store/persistence";
+import {
+  discoverTours,
+  registerTourProvider
+} from "../../store/provider";
 
 function getWorkspaceRoot() {
   return vscode.workspace.workspaceFolders![0].uri;
@@ -28,12 +33,27 @@ function createTour(step: CodeTour["steps"][number]): CodeTour {
   };
 }
 
+async function waitFor(
+  predicate: () => boolean,
+  timeout = 5000
+): Promise<void> {
+  const deadline = Date.now() + timeout;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      assert.fail("Timed out while waiting for the extension state to update.");
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+}
+
 describe("resilient tour anchors", () => {
   let symbolProvider: vscode.Disposable;
   const resolverDisposables: vscode.Disposable[] = [];
 
   before(async () => {
-    const extension = vscode.extensions.getExtension("vsls-contrib.codetour");
+    const extension = vscode.extensions.getExtension(
+      "ElluIFX.better-codetour"
+    );
     assert.ok(extension);
     await extension.activate();
     initializeTourPersistence({
@@ -42,6 +62,10 @@ describe("resilient tour anchors", () => {
     anchorResolver.register({
       subscriptions: resolverDisposables
     } as vscode.ExtensionContext);
+    registerTourProvider({
+      subscriptions: resolverDisposables
+    } as vscode.ExtensionContext);
+    await discoverTours();
 
     symbolProvider = vscode.languages.registerDocumentSymbolProvider(
       { language: "plaintext", scheme: "file" },
@@ -168,8 +192,90 @@ describe("resilient tour anchors", () => {
     assert.strictEqual(migrated.$schema, "./schema.json");
     assert.deepStrictEqual(migrated.steps, original.steps);
     assert.strictEqual(getTourSchemaReference(tourUri), "./schema.json");
+    const differentlyCasedDriveUri = tourUri.with({
+      path: tourUri.path.replace(/^\/([A-Z]):/, (_, drive: string) =>
+        `/${drive.toLocaleLowerCase()}:`
+      )
+    });
+    assert.strictEqual(
+      getTourSchemaReference(differentlyCasedDriveUri),
+      "./schema.json"
+    );
     await vscode.workspace.fs.stat(
       vscode.Uri.joinPath(getWorkspaceRoot(), ".tours", "schema.json")
+    );
+  });
+
+  it("persists virtual content edits as decoded text", async () => {
+    const tour = createTour({
+      file: "embedded.txt",
+      description: "embedded content",
+      contents: "before",
+      markerTitle: "runtime-only"
+    });
+    store.activeTour = {
+      tour,
+      step: 0,
+      workspaceRoot: getWorkspaceRoot(),
+      thread: null
+    };
+
+    try {
+      const provider = new CodeTourFileSystemProvider();
+      const virtualUri = vscode.Uri.parse("codetour://current/embedded.txt");
+      await provider.writeFile(
+        virtualUri,
+        new TextEncoder().encode("after\ncontent"),
+        { create: false, overwrite: true }
+      );
+
+      assert.strictEqual(
+        store.activeTour.tour.steps[0].contents,
+        "after\ncontent"
+      );
+      assert.strictEqual(
+        store.activeTour.tour.steps[0].markerTitle,
+        "runtime-only"
+      );
+      const persisted = JSON.parse(
+        new TextDecoder().decode(
+          await vscode.workspace.fs.readFile(vscode.Uri.parse(tour.id))
+        )
+      );
+      assert.strictEqual(persisted.steps[0].contents, "after\ncontent");
+      assert.strictEqual(persisted.steps[0].markerTitle, undefined);
+    } finally {
+      store.activeTour = null;
+    }
+  });
+
+  it("refreshes tours after external create, change, and delete events", async () => {
+    const tourUri = vscode.Uri.joinPath(
+      getWorkspaceRoot(),
+      ".tours",
+      "watched.tour"
+    );
+    const write = (title: string) =>
+      vscode.workspace.fs.writeFile(
+        tourUri,
+        new TextEncoder().encode(
+          JSON.stringify({ title, steps: [{ description: "watched" }] })
+        )
+    );
+
+    await write("Watcher Created");
+    await waitFor(() =>
+      store.tours.some(tour => tour.title === "Watcher Created")
+    );
+
+    await write("Watcher Changed");
+    await waitFor(() =>
+      store.tours.some(tour => tour.title === "Watcher Changed")
+    );
+
+    await vscode.workspace.fs.delete(tourUri);
+    await waitFor(() =>
+      store.tours.every(tour => tour.title !== "Watcher Changed")
     );
   });
 });

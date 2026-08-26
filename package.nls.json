@@ -1,5 +1,5 @@
 {
-  "extension.displayName": "CodeTour",
+  "extension.displayName": "Better-CodeTour",
   "extension.description": "Record and play guided tours of codebases directly in VS Code.",
   "configuration.title": "CodeTour",
   "configuration.promptForWorkspaceTours": "Show a notification when a workspace containing tours is opened for the first time.",

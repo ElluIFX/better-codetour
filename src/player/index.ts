@@ -61,10 +61,11 @@ export function generatePreviewContent(content: string) {
   return content
     .replace(SHELL_SCRIPT_PATTERN, (_, script) => {
       const args = encodeURIComponent(JSON.stringify([script]));
-      const s = `> [${script}](command:codetour.sendTextToTerminal?${args} "Run \\"${script.replace(
-        /"/g,
-        "'"
-      )}\\" in a terminal")`;
+      const tooltip = l10n.t(
+        'Run "{0}" in a terminal',
+        script.replace(/"/g, "'")
+      ).replace(/"/g, '\\"');
+      const s = `> [${script}](command:codetour.sendTextToTerminal?${args} "${tooltip}")`;
       return s;
     })
     .replace(COMMAND_PATTERN, (_, commandPrefix, params) => {
@@ -106,7 +107,10 @@ export function generatePreviewContent(content: string) {
         }
         const argsContent = encodeURIComponent(JSON.stringify(args));
         const title = linkTitle || tour.title;
-        return `[${title}](command:codetour.startTourByTitle?${argsContent} "Start \\"${tour.title}\\" tour")`;
+        const tooltip = l10n
+          .t('Start "{0}" tour', tour.title)
+          .replace(/"/g, '\\"');
+        return `[${title}](command:codetour.startTourByTitle?${argsContent} "${tooltip}")`;
       }
 
       return _;
@@ -558,8 +562,8 @@ async function showDocument(uri: Uri, range: Range, selection?: Selection) {
 export function registerPlayerModule(context: ExtensionContext) {
   registerPlayerCommands();
   registerTreeProvider(context);
-  registerFileSystemProvider();
-  registerTextDocumentContentProvider();
+  registerFileSystemProvider(context);
+  registerTextDocumentContentProvider(context);
   registerStatusBar(context);
   registerDecorators(context);
   void registerCodeStatusModule(context);

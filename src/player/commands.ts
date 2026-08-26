@@ -224,7 +224,7 @@ export function registerPlayerCommands() {
         const contents = await readUriContents(uri[0]);
 
         const tour = JSON.parse(contents);
-        tour.id = decodeURIComponent(uri[0].toString());
+        tour.id = uri[0].toString();
 
         startCodeTour(tour);
       } catch {

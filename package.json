@@ -1,11 +1,12 @@
 {
-  "name": "codetour",
+  "name": "better-codetour",
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
-  "publisher": "vsls-contrib",
+  "publisher": "ElluIFX",
   "version": "0.1.0",
   "author": {
-    "name": "Microsoft Corporation"
+    "name": "ElluIFX",
+    "url": "https://github.com/ElluIFX"
   },
   "repository": {
     "type": "git",
@@ -725,7 +726,7 @@
   "scripts": {
     "build": "webpack --mode production",
     "compile-tests": "tsc -p ./tsconfig.test.json",
-    "test": "npm run compile-tests && node ./out/test/runTest.js",
+    "test": "npm run build && npm run compile-tests && node ./out/test/runTest.js",
     "vscode:prepublish": "npm run build",
     "watch": "webpack --mode development --watch",
     "package": "vsce package"

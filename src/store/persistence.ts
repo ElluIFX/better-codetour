@@ -43,6 +43,12 @@ function getWorkspaceSchemaUri(workspaceFolder: vscode.WorkspaceFolder) {
   );
 }
 
+function normalizeDriveLetter(uriPath: string) {
+  return uriPath.replace(/^\/([A-Z]):/, (_, drive: string) =>
+    `/${drive.toLocaleLowerCase()}:`
+  );
+}
+
 export function getTourSchemaReference(tourUri: vscode.Uri): string {
   const workspaceFolder = vscode.workspace.getWorkspaceFolder(tourUri);
   if (!workspaceFolder) {
@@ -51,8 +57,8 @@ export function getTourSchemaReference(tourUri: vscode.Uri): string {
 
   const schemaUri = getWorkspaceSchemaUri(workspaceFolder);
   let relative = path.posix.relative(
-    path.posix.dirname(tourUri.path),
-    schemaUri.path
+    path.posix.dirname(normalizeDriveLetter(tourUri.path)),
+    normalizeDriveLetter(schemaUri.path)
   );
   if (!relative.startsWith(".")) {
     relative = `./${relative}`;
