@@ -12,7 +12,6 @@ import {
   CommentThread,
   CommentThreadCollapsibleState,
   ExtensionContext,
-  l10n,
   MarkdownString,
   Range,
   Selection,
@@ -23,16 +22,15 @@ import {
   workspace
 } from "vscode";
 import { SMALL_ICON_URL } from "../constants";
-import { anchorResolver } from "../anchors";
 import { CodeTour, store } from "../store";
 import { initializeStorage } from "../store/storage";
 import {
+  getActiveStepMarker,
   getActiveTourNumber,
   getFileUri,
   getStepFileUri,
   getStepLabel,
-  getTourTitle,
-  getWorkspaceUri
+  getTourTitle
 } from "../utils";
 import { registerCodeStatusModule } from "./codeStatus";
 import { registerPlayerCommands } from "./commands";
@@ -57,57 +55,37 @@ const TOUR_REFERENCE_PATTERN =
 const FILE_REFERENCE_PATTERN = /(\!)?(\[[^\]]+\]\()(\.[^\)]+)(?=\))/gm;
 const CODE_FENCE_PATTERN = /```[^\n]+\n(.+)\n```/gms;
 
-export function generatePreviewContent(
-  content: string,
-  contextTour?: CodeTour
-) {
+export function generatePreviewContent(content: string) {
   return content
     .replace(SHELL_SCRIPT_PATTERN, (_, script) => {
       const args = encodeURIComponent(JSON.stringify([script]));
-      const tooltip = l10n
-        .t('Run "{0}" in a terminal', script.replace(/"/g, "'"))
-        .replace(/"/g, '\\"');
-      const s = `> [${script}](command:codetour.sendTextToTerminal?${args} "${tooltip}")`;
+      const s = `> [${script}](command:codetour.sendTextToTerminal?${args} "Run \\"${script.replace(
+        /"/g,
+        "'"
+      )}\\" in a terminal")`;
       return s;
     })
-    .replace(COMMAND_PATTERN, (match, commandPrefix, params) => {
-      try {
-        const args = encodeURIComponent(JSON.stringify(JSON.parse(params)));
-        return `${commandPrefix}${args}`;
-      } catch {
-        return match;
-      }
+    .replace(COMMAND_PATTERN, (_, commandPrefix, params) => {
+      const args = encodeURIComponent(JSON.stringify(JSON.parse(params)));
+      return `${commandPrefix}${args}`;
     })
-    .replace(FILE_REFERENCE_PATTERN, (match, isImage, prefix, filePath) => {
-      const tour = contextTour || store.activeTour?.tour;
-      const workspaceUri =
-        tour && store.activeTour?.tour.id === tour.id
-          ? store.activeTour.workspaceRoot
-          : tour
-          ? getWorkspaceUri(tour)
-          : undefined;
-      if (!workspaceUri) {
-        return match;
-      }
+    .replace(FILE_REFERENCE_PATTERN, (_, isImage, prefix, filePath) => {
+      const workspaceUri = workspace.getWorkspaceFolder(
+        Uri.parse(store.activeTour!.tour.id)
+      )!.uri;
       const fileUri = Uri.joinPath(workspaceUri, filePath);
 
       if (isImage) {
         return `!${prefix}${fileUri.toString()}`;
       } else {
         const args = encodeURIComponent(JSON.stringify([fileUri]));
-        return `${prefix}command:vscode.open?${args} "${l10n.t(
-          "Open {0}",
-          filePath
-        )}"`;
+        return `${prefix}command:vscode.open?${args} "Open ${filePath}"`;
       }
     })
     .replace(TOUR_REFERENCE_PATTERN, (_, linkTitle, tourTitle, stepNumber) => {
       if (!tourTitle) {
         const title = linkTitle || `#${stepNumber}`;
-        return `[${title}](command:codetour.navigateToStep?${stepNumber} "${l10n.t(
-          "Navigate to step #{0}",
-          stepNumber
-        )}")`;
+        return `[${title}](command:codetour.navigateToStep?${stepNumber} "Navigate to step #${stepNumber}")`;
       }
 
       const tours = store.activeTour?.tours || store.tours;
@@ -120,19 +98,15 @@ export function generatePreviewContent(
         }
         const argsContent = encodeURIComponent(JSON.stringify(args));
         const title = linkTitle || tour.title;
-        const tooltip = l10n
-          .t('Start "{0}" tour', tour.title)
-          .replace(/"/g, '\\"');
-        return `[${title}](command:codetour.startTourByTitle?${argsContent} "${tooltip}")`;
+        return `[${title}](command:codetour.startTourByTitle?${argsContent} "Start \\"${tour.title}\\" tour")`;
       }
 
       return _;
     })
     .replace(CODE_FENCE_PATTERN, (_, codeBlock) => {
       const params = encodeURIComponent(JSON.stringify([codeBlock]));
-      const insertCode = l10n.t("Insert Code");
       return `${_}
-↪ [${insertCode}](command:codetour.insertCodeSnippet?${params} "${insertCode}")`;
+↪ [Insert Code](command:codetour.insertCodeSnippet?${params} "Insert Code")`;
     });
 }
 
@@ -160,79 +134,15 @@ export class CodeTourComment implements Comment {
 }
 
 let controller: CommentController | null;
-let renderGeneration = 0;
-let lastUnresolvedNotice: string | undefined;
 
 export async function focusPlayer() {
   const currentThread = store.activeTour!.thread!;
   showDocument(currentThread.uri, currentThread.range);
 }
 
-export function getRecordingCommentingRanges(
-  document: TextDocument,
-  selection?: Selection
-) {
-  if (!selection || selection.isEmpty) {
-    return [
-      new Range(
-        document.lineAt(0).range.start,
-        document.lineAt(document.lineCount - 1).range.end
-      )
-    ];
-  }
-
-  const selectedEndLine =
-    selection.end.character === 0 && selection.end.line > selection.start.line
-      ? selection.end.line - 1
-      : selection.end.line;
-  const ranges = [selection];
-  if (selection.start.line > 0) {
-    ranges.push(
-      new Selection(
-        document.lineAt(0).range.start,
-        document.lineAt(selection.start.line - 1).range.end
-      )
-    );
-  }
-  if (selectedEndLine < document.lineCount - 1) {
-    ranges.push(
-      new Selection(
-        document.lineAt(selectedEndLine + 1).range.start,
-        document.lineAt(document.lineCount - 1).range.end
-      )
-    );
-  }
-  return ranges;
-}
-
-function updateCommentingRangeProvider() {
-  if (!controller) {
-    return;
-  }
-  controller.commentingRangeProvider = {
-    provideCommentingRanges: (document: TextDocument) => {
-      if (!store.isRecording) {
-        return null;
-      }
-      const editor = window.visibleTextEditors.find(
-        candidate =>
-          candidate.document.uri.toString() === document.uri.toString()
-      );
-      return getRecordingCommentingRanges(document, editor?.selection);
-    }
-  };
-}
-
-export function refreshCommentingRanges() {
-  updateCommentingRangeProvider();
-}
-
 export async function startPlayer() {
   if (controller) {
     controller.dispose();
-    if (store.activeTour) {
-      store.activeTour.thread = null;
-    }
   }
 
   controller = comments.createCommentController(
@@ -240,18 +150,28 @@ export async function startPlayer() {
     CONTROLLER_LABEL
   );
 
-  updateCommentingRangeProvider();
+  // TODO: Correctly limit the commenting ranges
+  // to files within the workspace root
+  controller.commentingRangeProvider = {
+    provideCommentingRanges: (document: TextDocument) => {
+      if (store.isRecording) {
+        return [new Range(0, 0, document.lineCount, 0)];
+      } else {
+        return null;
+      }
+    }
+  };
 }
 
 export async function stopPlayer() {
+  if (store.activeTour?.thread) {
+    store.activeTour!.thread.dispose();
+    store.activeTour!.thread = null;
+  }
+
   if (controller) {
     controller.dispose();
     controller = null;
-  } else if (store.activeTour?.thread) {
-    store.activeTour.thread.dispose();
-  }
-  if (store.activeTour) {
-    store.activeTour.thread = null;
   }
 }
 
@@ -309,7 +229,10 @@ function getNextTour(): CodeTour | undefined {
 }
 
 async function renderCurrentStep() {
-  const generation = ++renderGeneration;
+  if (store.activeTour!.thread) {
+    store.activeTour!.thread.dispose();
+  }
+
   const currentTour = store.activeTour!.tour;
   const currentStep = store.activeTour!.step;
 
@@ -318,124 +241,41 @@ async function renderCurrentStep() {
     return;
   }
 
-  if (step.file && !step.anchor) {
-    store.activeTour!.thread?.dispose();
-    store.activeTour!.thread = null;
-    void window.showWarningMessage(
-      l10n.t(
-        "This CodeTour file step has no anchor. Edit the tour and bind the step before playing it."
-      )
-    );
-    return;
-  }
-
   const workspaceRoot = store.activeTour?.workspaceRoot;
-  const cachedAnchorResolution = step.anchor
-    ? anchorResolver.get(currentTour, currentStep)
-    : undefined;
-  if (cachedAnchorResolution?.state === "pending") {
-    return;
-  }
-  const anchorResolution = step.anchor
-    ? cachedAnchorResolution ||
-      (await anchorResolver.resolveStep(currentTour, currentStep))
-    : undefined;
-  if (
-    generation !== renderGeneration ||
-    !store.activeTour ||
-    store.activeTour.tour.id !== currentTour.id ||
-    store.activeTour.step !== currentStep
-  ) {
-    return;
-  }
+  const uri = await getStepFileUri(step, workspaceRoot, currentTour.ref);
 
-  if (step.anchor && anchorResolution?.state !== "resolved") {
-    store.activeTour.thread?.dispose();
-    store.activeTour.thread = null;
-    const noticeKey = `${currentTour.id}#${currentStep}#${anchorResolution?.state}`;
-    if (lastUnresolvedNotice !== noticeKey) {
-      lastUnresolvedNotice = noticeKey;
-      const rebind = l10n.t("Rebind");
-      const skip = l10n.t("Skip Step");
-      void window
-        .showWarningMessage(
-          step.anchor.type === "symbol"
-            ? l10n.t("The symbol for this CodeTour step could not be resolved.")
-            : step.anchor.type === "content"
-            ? l10n.t("The content for this CodeTour step could not be found.")
-            : l10n.t(
-                "The line for this CodeTour step is outside the document."
-              ),
-          rebind,
-          skip
-        )
-        .then(response => {
-          if (response === rebind) {
-            void commands.executeCommand("codetour.rebindTourStepAnchor", {
-              tour: currentTour,
-              stepNumber: currentStep
-            });
-          } else if (response === skip) {
-            void commands.executeCommand("codetour.skipUnresolvedTourStep");
-          }
-        });
+  let line = step.line
+    ? step.line - 1
+    : step.selection
+    ? step.selection.end.line - 1
+    : undefined;
+
+  if (step.file && line === undefined) {
+    const stepPattern = step.pattern || getActiveStepMarker();
+    if (stepPattern) {
+      const document = await workspace.openTextDocument(uri);
+      const match = document.getText().match(new RegExp(stepPattern, "m"));
+      if (match) {
+        line = document.positionAt(match.index!).line;
+      }
     }
-    return;
   }
-  lastUnresolvedNotice = undefined;
-
-  const uri =
-    anchorResolution?.uri ||
-    (await getStepFileUri(
-      step,
-      workspaceRoot,
-      currentTour.ref,
-      currentTour,
-      currentStep
-    ));
-
-  let line = anchorResolution?.range?.start.line;
 
   if (line === undefined) {
-    try {
-      const document = await workspace.openTextDocument(uri);
-      line = Math.max(document.lineCount - 1, 0);
-    } catch {
-      line = 0;
-    }
+    // The step doesn't have a discoverable line number and so
+    // stick the step at the end of the file. Unfortunately, there
+    // isn't a way to say EOF, so 2000 is a temporary hack.
+    line = 2000;
   }
 
-  if (!anchorResolution?.range) {
-    try {
-      const document = await workspace.openTextDocument(uri);
-      line = Math.min(Math.max(line, 0), Math.max(document.lineCount - 1, 0));
-    } catch {
-      line = Math.max(line, 0);
-    }
-  }
-
-  if (
-    generation !== renderGeneration ||
-    !store.activeTour ||
-    store.activeTour.tour.id !== currentTour.id ||
-    store.activeTour.step !== currentStep
-  ) {
-    return;
-  }
-
-  const range = anchorResolution?.range || new Range(line!, 0, line!, 0);
-  let label = l10n.t(
-    "Step #{0} of {1}",
-    currentStep + 1,
-    currentTour!.steps.length
-  );
+  const range = new Range(line!, 0, line!, 0);
+  let label = `Step #${currentStep + 1} of ${currentTour!.steps.length}`;
 
   if (currentTour.title) {
     const title = getTourTitle(currentTour);
     label += ` (${title})`;
   }
 
-  store.activeTour!.thread?.dispose();
   store.activeTour!.thread = controller!.createCommentThread(uri, range, []);
 
   const mode =
@@ -460,11 +300,7 @@ async function renderCurrentStep() {
         false
       );
       const suffix = stepLabel ? ` (${stepLabel})` : "";
-      content += `← [${l10n.t(
-        "Previous"
-      )}${suffix}](command:codetour.previousTourStep "${l10n.t(
-        "Navigate to previous step"
-      )}")`;
+      content += `← [Previous${suffix}](command:codetour.previousTourStep "Navigate to previous step")`;
     } else {
       const previousTour = getPreviousTour();
       if (previousTour) {
@@ -474,11 +310,7 @@ async function renderCurrentStep() {
         const argsContent = encodeURIComponent(
           JSON.stringify([previousTour.title])
         );
-        content += `← [${l10n.t(
-          "Previous Tour"
-        )} (${tourTitle})](command:codetour.startTourByTitle?${argsContent} "${l10n.t(
-          "Navigate to previous tour"
-        )}")`;
+        content += `← [Previous Tour (${tourTitle})](command:codetour.startTourByTitle?${argsContent} "Navigate to previous tour")`;
       }
     }
 
@@ -491,11 +323,7 @@ async function renderCurrentStep() {
         false
       );
       const suffix = stepLabel ? ` (${stepLabel})` : "";
-      content += `${prefix}[${l10n.t(
-        "Next"
-      )}${suffix}](command:codetour.nextTourStep "${l10n.t(
-        "Navigate to next step"
-      )}") →`;
+      content += `${prefix}[Next${suffix}](command:codetour.nextTourStep "Navigate to next step") →`;
     } else if (isFinalStep) {
       const nextTour = getNextTour();
       if (nextTour) {
@@ -503,15 +331,9 @@ async function renderCurrentStep() {
         const argsContent = encodeURIComponent(
           JSON.stringify([nextTour.title])
         );
-        content += `${prefix}[${l10n.t(
-          "Next Tour"
-        )} (${tourTitle})](command:codetour.finishTour?${argsContent} "${l10n.t(
-          "Start next tour"
-        )}")`;
+        content += `${prefix}[Next Tour (${tourTitle})](command:codetour.finishTour?${argsContent} "Start next tour")`;
       } else {
-        content += `${prefix}[${l10n.t(
-          "Finish Tour"
-        )}](command:codetour.finishTour "${l10n.t("Finish the tour")}")`;
+        content += `${prefix}[Finish Tour](command:codetour.finishTour "Finish the tour")`;
       }
     }
   }
@@ -535,18 +357,25 @@ async function renderCurrentStep() {
   if (hasNextStep) {
     contextValues.push("hasNext");
   }
-  if (step.anchor?.type === "line") {
-    contextValues.push("lineAnchor");
-  } else if (step.anchor) {
-    contextValues.push("resilientAnchor");
-  }
 
   store.activeTour!.thread.contextValue = contextValues.join(".");
   store.activeTour!.thread.collapsibleState =
     CommentThreadCollapsibleState.Expanded;
 
-  const selection =
-    anchorResolution?.selection || new Selection(range.start, range.end);
+  let selection;
+  if (step.selection) {
+    // Adjust the 1-based positions
+    // to the 0-based positions that
+    // VS Code's editor uses.
+    selection = new Selection(
+      step.selection.start.line - 1,
+      step.selection.start.character - 1,
+      step.selection.end.line - 1,
+      step.selection.end.character - 1
+    );
+  } else {
+    selection = new Selection(range.start, range.end);
+  }
 
   await showDocument(uri, range, selection);
 
@@ -562,10 +391,7 @@ async function renderCurrentStep() {
       await commands.executeCommand(commandName);
     } catch {
       window.showErrorMessage(
-        l10n.t(
-          "The view for this tour step is unavailable: {0}. Check the tour and try again.",
-          step.view
-        )
+        `The current tour step is attempting to focus a view which isn't available: ${step.view}. Please check the tour and try again.`
       );
     }
   }
@@ -573,21 +399,19 @@ async function renderCurrentStep() {
   if (step.commands) {
     for (const command of step.commands) {
       let name = command,
-        args: any[] = [];
+      args: any[] = [];
+
+      if (command.includes("?")) {
+        const parts = command.split("?");
+        name = parts[0];
+        args = JSON.parse(parts[1]);
+      }
 
       try {
-        if (command.includes("?")) {
-          const parts = command.split("?");
-          name = parts[0];
-          args = JSON.parse(parts.slice(1).join("?"));
-          if (!Array.isArray(args)) {
-            throw new Error("CodeTour command arguments must be a JSON array.");
-          }
-        }
         console.log("Executing command", name, JSON.stringify(args));
         await commands.executeCommand(name, ...args);
       } catch (e) {
-        window.showErrorMessage(l10n.t("An error occurred: {0}", String(e)));
+        window.showErrorMessage(`An error has occurred: ${e}`);
       }
     }
   }
@@ -611,48 +435,18 @@ async function showDocument(uri: Uri, range: Range, selection?: Selection) {
 
 export function registerPlayerModule(context: ExtensionContext) {
   registerPlayerCommands();
-  registerTreeProvider(context);
-  registerFileSystemProvider(context);
-  registerTextDocumentContentProvider(context);
-  registerStatusBar(context);
-  registerDecorators(context);
-  void registerCodeStatusModule(context);
+  registerTreeProvider(context.extensionPath);
+  registerFileSystemProvider();
+  registerTextDocumentContentProvider();
+  registerStatusBar();
+  registerDecorators();
+  registerCodeStatusModule();
 
   initializeStorage(context);
 
-  context.subscriptions.push(
-    window.onDidChangeTextEditorSelection(() => {
-      if (store.isRecording) {
-        updateCommentingRangeProvider();
-      }
-    }),
-    anchorResolver.onDidChange(() => {
-      if (!store.activeTour || store.activeTour.step < 0) {
-        return;
-      }
-      const resolution = anchorResolver.get(
-        store.activeTour.tour,
-        store.activeTour.step
-      );
-      if (resolution && resolution.state !== "pending") {
-        void renderCurrentStep();
-      }
-    }),
-    commands.registerCommand("codetour.skipUnresolvedTourStep", async () => {
-      if (!store.activeTour) {
-        return;
-      }
-      if (store.activeTour.step < store.activeTour.tour.steps.length - 1) {
-        store.activeTour.step++;
-      } else {
-        await commands.executeCommand("codetour.endTour");
-      }
-    })
-  );
-
   // Watch for changes to the active tour property,
   // and automatically re-render the current step in response.
-  const disposeRenderReaction = reaction(
+  reaction(
     () => [
       store.activeTour
         ? [
@@ -661,7 +455,7 @@ export function registerPlayerModule(context: ExtensionContext) {
             store.activeTour.tour.steps.map(step => [
               step.title,
               step.description,
-              step.anchor,
+              step.line,
               step.directory,
               step.view
             ])
@@ -670,9 +464,8 @@ export function registerPlayerModule(context: ExtensionContext) {
     ],
     () => {
       if (store.activeTour) {
-        void renderCurrentStep();
+        renderCurrentStep();
       }
     }
   );
-  context.subscriptions.push({ dispose: disposeRenderReaction });
 }

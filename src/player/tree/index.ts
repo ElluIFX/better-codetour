@@ -6,15 +6,12 @@ import {
   Disposable,
   Event,
   EventEmitter,
-  ExtensionContext,
-  l10n,
   MarkdownString,
   TreeDataProvider,
   TreeItem,
   window
 } from "vscode";
 import { EXTENSION_NAME } from "../../constants";
-import { anchorResolver } from "../../anchors";
 import { generatePreviewContent } from "..";
 import { store } from "../../store";
 import { CodeTourNode, CodeTourStepNode } from "./nodes";
@@ -23,25 +20,13 @@ class CodeTourTreeProvider implements TreeDataProvider<TreeItem>, Disposable {
   private _disposables: Disposable[] = [];
 
   private _onDidChangeTreeData = new EventEmitter<TreeItem | undefined>();
-  public readonly onDidChangeTreeData: Event<TreeItem | undefined> =
-    this._onDidChangeTreeData.event;
+  public readonly onDidChangeTreeData: Event<TreeItem | undefined> = this
+    ._onDidChangeTreeData.event;
 
   constructor(private extensionPath: string) {
-    const disposeReaction = reaction(
+    reaction(
       () => [
-        store.tours.map(tour => [
-          tour.id,
-          tour.title,
-          tour.description,
-          tour.isPrimary,
-          tour.steps.map(step => [
-            step.title,
-            step.description,
-            step.icon,
-            step.file,
-            step.anchor
-          ])
-        ]),
+        store.tours,
         store.hasTours,
         store.isRecording,
         store.progress.map(([id, completedSteps]) => [
@@ -54,8 +39,8 @@ class CodeTourTreeProvider implements TreeDataProvider<TreeItem>, Disposable {
               store.activeTour.tour.description,
               store.activeTour.tour.steps.map(step => [
                 step.title,
-                step.description,
-                step.anchor
+                step.markerTitle,
+                step.description
               ])
             ]
           : null
@@ -63,12 +48,6 @@ class CodeTourTreeProvider implements TreeDataProvider<TreeItem>, Disposable {
       () => {
         this._onDidChangeTreeData.fire(undefined);
       }
-    );
-    this._disposables.push(
-      { dispose: disposeReaction },
-      anchorResolver.onDidChange(() =>
-        this._onDidChangeTreeData.fire(undefined)
-      )
     );
   }
 
@@ -99,13 +78,13 @@ class CodeTourTreeProvider implements TreeDataProvider<TreeItem>, Disposable {
         let item;
 
         if (store.isRecording && store.activeTour?.tour.id == element.tour.id) {
-          item = new TreeItem(l10n.t("Add tour step..."));
+          item = new TreeItem("Add tour step...");
           item.command = {
             command: "codetour.addContentStep",
-            title: l10n.t("Add tour step...")
+            title: "Add tour step..."
           };
         } else {
-          item = new TreeItem(l10n.t("No steps recorded"));
+          item = new TreeItem("No steps recorded");
         }
 
         return [item];
@@ -130,8 +109,7 @@ class CodeTourTreeProvider implements TreeDataProvider<TreeItem>, Disposable {
   async resolveTreeItem(element: TreeItem): Promise<TreeItem> {
     if (element instanceof CodeTourStepNode) {
       const content = generatePreviewContent(
-        element.tour.steps[element.stepNumber].description,
-        element.tour
+        element.tour.steps[element.stepNumber].description
       );
 
       const tooltip = new MarkdownString(content);
@@ -146,12 +124,11 @@ class CodeTourTreeProvider implements TreeDataProvider<TreeItem>, Disposable {
 
   dispose() {
     this._disposables.forEach(disposable => disposable.dispose());
-    this._onDidChangeTreeData.dispose();
   }
 }
 
-export function registerTreeProvider(context: ExtensionContext) {
-  const treeDataProvider = new CodeTourTreeProvider(context.extensionPath);
+export function registerTreeProvider(extensionPath: string) {
+  const treeDataProvider = new CodeTourTreeProvider(extensionPath);
   const treeView = window.createTreeView(`${EXTENSION_NAME}.tours`, {
     showCollapseAll: true,
     treeDataProvider,
@@ -159,7 +136,7 @@ export function registerTreeProvider(context: ExtensionContext) {
   });
 
   let isRevealPending = false;
-  const visibilityDisposable = treeView.onDidChangeVisibility(e => {
+  treeView.onDidChangeVisibility(e => {
     if (e.visible && isRevealPending) {
       isRevealPending = false;
       revealCurrentStepNode();
@@ -167,24 +144,14 @@ export function registerTreeProvider(context: ExtensionContext) {
   });
 
   function revealCurrentStepNode() {
-    const activeTour = store.activeTour;
-    if (!activeTour || activeTour.step < 0) {
-      return;
-    }
     setTimeout(() => {
-      if (
-        store.activeTour?.tour.id === activeTour.tour.id &&
-        store.activeTour.step === activeTour.step &&
-        activeTour.tour.steps[activeTour.step]
-      ) {
-        void treeView
-          .reveal(new CodeTourStepNode(activeTour.tour, activeTour.step))
-          .then(undefined, () => undefined);
-      }
+      treeView.reveal(
+        new CodeTourStepNode(store.activeTour!.tour, store.activeTour!.step)
+      );
     }, 300);
   }
 
-  const disposeRevealReaction = reaction(
+  reaction(
     () => [
       store.activeTour
         ? [
@@ -212,7 +179,4 @@ export function registerTreeProvider(context: ExtensionContext) {
       }
     }
   );
-  context.subscriptions.push(treeDataProvider, treeView, visibilityDisposable, {
-    dispose: disposeRevealReaction
-  });
 }

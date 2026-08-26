@@ -12,16 +12,8 @@ export async function initializeService(vslsApi: vsls.LiveShare) {
 
   const response = await service.request("getCurrentTourStep", []);
   if (response) {
-    startCodeTour(
-      response.tour,
-      response.stepNumber,
-      undefined,
-      false,
-      true,
-      undefined,
-      false
-    );
+    startCodeTour(response.tour, response.stepNumber);
   }
 
-  return initializeBaseService(vslsApi, service);
+  initializeBaseService(vslsApi, service);
 }

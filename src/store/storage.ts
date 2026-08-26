@@ -8,9 +8,9 @@ import { CodeTour, store } from ".";
 const CODETOUR_PROGRESS_KEY = "codetour:progress";
 
 export var progress: {
-  update(): Promise<void>;
+  update(): void;
   isComplete(tour: CodeTour, stepNumber?: number): boolean;
-  reset(tour?: CodeTour): Promise<void>;
+  reset(): void;
 };
 
 function getProgress(tour: CodeTour) {
@@ -27,10 +27,8 @@ export function initializeStorage(context: ExtensionContext) {
         ([id]) => store.activeTour?.tour.id === id
       );
 
-      if (progress) {
-        if (!progress[1].includes(store.activeTour!.step)) {
-          progress[1].push(store.activeTour!.step);
-        }
+      if (progress && !progress![1].includes(store.activeTour!.step)) {
+        progress![1].push(store.activeTour!.step);
       } else {
         store.progress.push([
           store.activeTour!.tour.id,
@@ -38,12 +36,8 @@ export function initializeStorage(context: ExtensionContext) {
         ]);
       }
 
-      await commands.executeCommand(
-        "setContext",
-        "codetour:hasProgress",
-        true
-      );
-      await context.globalState.update(CODETOUR_PROGRESS_KEY, store.progress);
+      commands.executeCommand("setContext", "codetour:hasProgress", true);
+      return context.globalState.update(CODETOUR_PROGRESS_KEY, store.progress);
     },
     isComplete(tour: CodeTour, stepNumber?: number): boolean {
       const tourProgress = getProgress(tour);
@@ -54,15 +48,12 @@ export function initializeStorage(context: ExtensionContext) {
       }
     },
     async reset(tour?: CodeTour) {
+      commands.executeCommand("setContext", "codetour:hasProgress", false);
+
       store.progress = tour
         ? store.progress.filter(tourProgress => tourProgress[0] !== tour.id)
         : [];
-      await commands.executeCommand(
-        "setContext",
-        "codetour:hasProgress",
-        store.progress.length > 0
-      );
-      await context.globalState.update(CODETOUR_PROGRESS_KEY, store.progress);
+      return context.globalState.update(CODETOUR_PROGRESS_KEY, store.progress);
     }
   };
 

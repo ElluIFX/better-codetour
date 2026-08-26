@@ -3,52 +3,29 @@
 
 import * as vscode from "vscode";
 import { EXTENSION_NAME, SMALL_ICON_URL } from "../constants";
-import { anchorResolver } from "../anchors";
-import { CodeTour, store } from "../store";
+import { CodeTour } from "../store";
 import { getStepFileUri, getWorkspaceUri } from "../utils";
 
 class CodeTourNotebookProvider implements vscode.NotebookSerializer {
+  originalContent: Uint8Array = new TextEncoder().encode("");
+
   async deserializeNotebook(
     content: Uint8Array,
     token: any
   ): Promise<vscode.NotebookData> {
-    const contents = new TextDecoder().decode(content);
+    this.originalContent = content;
+    let contents = new TextDecoder().decode(content);
 
-    const persistedTour = JSON.parse(contents) as CodeTour;
-    const tour = { ...persistedTour };
-    const knownTours = [
-      ...(store.activeTour ? [store.activeTour.tour] : []),
-      ...store.tours
-    ];
-    const knownTour = knownTours.find(
-      candidate =>
-        candidate.title === tour.title &&
-        JSON.stringify(candidate.steps) === JSON.stringify(tour.steps)
-    );
-    tour.id = knownTour?.id || "";
-    const workspaceRoot =
-      knownTour && store.activeTour?.tour.id === knownTour.id
-        ? store.activeTour.workspaceRoot
-        : getWorkspaceUri(tour);
-    tour.id ||= workspaceRoot?.toString() || "";
-    const steps: any[] = [];
+    let tour = <CodeTour>JSON.parse(contents);
+    const workspaceRoot = getWorkspaceUri(tour);
+    let steps: any[] = [];
 
-    for (const [stepNumber, item] of tour.steps.entries()) {
-      const uri = await getStepFileUri(
-        item,
-        workspaceRoot,
-        tour.ref,
-        tour,
-        stepNumber
-      );
+    for (let item of tour.steps) {
+      const uri = await getStepFileUri(item, workspaceRoot, tour.ref);
       const document = await vscode.workspace.openTextDocument(uri);
-      const resolution = item.anchor
-        ? await anchorResolver.resolveStep(tour, stepNumber)
-        : undefined;
-      const line = resolution?.range?.start.line || 0;
 
-      const startLine = Math.max(line - 9, 0);
-      const endLine = Math.min(line + 1, document.lineCount);
+      const startLine = item.line! > 10 ? item.line! - 10 : 0;
+      const endLine = item.line! > 1 ? item.line! - 1 : 0;
       const contents = document.getText(
         new vscode.Range(
           new vscode.Position(startLine, 0),
@@ -63,17 +40,15 @@ class CodeTourNotebookProvider implements vscode.NotebookSerializer {
       });
     }
 
-    const cells: vscode.NotebookCellData[] = [];
+    let cells: vscode.NotebookCellData[] = [];
 
     // Title cell
     cells.push(
       new vscode.NotebookCellData(
         1,
-        `## ![Icon](${SMALL_ICON_URL})&nbsp;&nbsp; CodeTour (${
-          tour.title
-        }) - ${vscode.l10n.t("{0} steps", steps.length)}\n\n${
-          tour.description === undefined ? "" : tour.description
-        }`,
+        `## ![Icon](${SMALL_ICON_URL})&nbsp;&nbsp; CodeTour (${tour.title}) - ${
+          steps.length
+        } steps\n\n${tour.description === undefined ? "" : tour.description}`,
         "markdown"
       )
     );
@@ -84,43 +59,30 @@ class CodeTourNotebookProvider implements vscode.NotebookSerializer {
         new vscode.NotebookCellOutput([
           new vscode.NotebookCellOutputItem(
             new TextEncoder().encode(
-              `_${vscode.l10n.t(
-                "Step #{0} of {1}",
-                index + 1,
-                steps.length
-              )}:_ ${step.description} ([${vscode.l10n.t("View File")}](${
-                step.uri
-              }))`
+              `_Step #${index + 1} of ${steps.length}:_ ${
+                step.description
+              } ([View File](${step.uri}))`
             ),
             "text/markdown"
           )
         ])
       ];
-      cells.push(cell);
     });
 
-    const notebook = new vscode.NotebookData(cells);
-    notebook.metadata = { codeTour: persistedTour };
-    return notebook;
+    return new vscode.NotebookData(cells);
   }
 
   async serializeNotebook(
     data: vscode.NotebookData,
     token: any
   ): Promise<Uint8Array> {
-    const tour = data.metadata?.codeTour;
-    if (!tour) {
-      throw new Error("The CodeTour notebook metadata is missing.");
-    }
-    return new TextEncoder().encode(JSON.stringify(tour, null, 2));
+    return this.originalContent;
   }
 }
 
-export function registerNotebookProvider(context: vscode.ExtensionContext) {
-  context.subscriptions.push(
-    vscode.workspace.registerNotebookSerializer(
-      EXTENSION_NAME,
-      new CodeTourNotebookProvider()
-    )
+export function registerNotebookProvider() {
+  vscode.notebook.registerNotebookSerializer(
+    EXTENSION_NAME,
+    new CodeTourNotebookProvider()
   );
 }

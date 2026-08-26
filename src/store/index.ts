@@ -4,37 +4,10 @@
 import { observable } from "mobx";
 import { CommentThread, Uri } from "vscode";
 
-export interface CodeTourSymbolPathSegment {
-  name: string;
-  kind: number;
+export interface CodeTourStepPosition {
+  line: number;
+  character: number;
 }
-
-export interface CodeTourSymbolAnchor {
-  type: "symbol";
-  path: CodeTourSymbolPathSegment[];
-}
-
-export interface CodeTourContentAnchor {
-  type: "content";
-  text: string;
-}
-
-export interface CodeTourLineAnchor {
-  type: "line";
-  number: number;
-}
-
-export type CodeTourAnchor =
-  | CodeTourLineAnchor
-  | CodeTourSymbolAnchor
-  | CodeTourContentAnchor;
-
-export type CodeTourAnchorState =
-  | "pending"
-  | "resolved"
-  | "unresolved"
-  | "unsupported"
-  | "ambiguous";
 
 export interface CodeTourStep {
   title?: string;
@@ -50,12 +23,20 @@ export interface CodeTourStep {
   uri?: string;
   view?: string;
 
+  // A line number and selection is only relevant for file-based
+  // steps. And even then, they're optional. If a file-based step
+  // doesn't have a line number, then the description is attached
+  // to the last line in the file, assuming it's describing the file itself
+  line?: number;
+  selection?: { start: CodeTourStepPosition; end: CodeTourStepPosition };
+
   commands?: string[];
-  anchor?: CodeTourAnchor;
+
+  pattern?: string;
+  markerTitle?: string;
 }
 
 export interface CodeTour {
-  $schema?: string;
   id: string;
   title: string;
   description?: string;
@@ -63,6 +44,7 @@ export interface CodeTour {
   ref?: string;
   isPrimary?: boolean;
   nextTour?: string;
+  stepMarker?: string;
   when?: string;
 }
 

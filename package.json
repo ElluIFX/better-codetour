@@ -1,25 +1,24 @@
 {
-  "name": "better-codetour",
-  "displayName": "%extension.displayName%",
-  "description": "%extension.description%",
-  "publisher": "ElluIFX",
-  "version": "0.2.0",
+  "name": "codetour",
+  "displayName": "CodeTour",
+  "description": "VS Code extension that allows you to record and playback guided tours of codebases, directly within the editor",
+  "publisher": "vsls-contrib",
+  "version": "0.0.59",
   "author": {
-    "name": "ElluIFX",
-    "url": "https://github.com/ElluIFX"
+    "name": "Microsoft Corporation"
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/ElluIFX/better-codetour"
+    "url": "https://github.com/microsoft/codetour"
   },
   "bugs": {
-    "url": "https://github.com/ElluIFX/better-codetour/issues"
+    "url": "https://github.com/microsoft/codetour/issues"
   },
-  "homepage": "https://github.com/ElluIFX/better-codetour#readme",
+  "homepage": "https://github.com/microsoft/codetour#readme",
   "license": "MIT",
   "icon": "images/icon.png",
   "engines": {
-    "vscode": "^1.73.0"
+    "vscode": "^1.60.0"
   },
   "categories": [
     "Other"
@@ -33,223 +32,201 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onNotebook:codetour"
+    "onNotebookEditor:codetour"
   ],
   "main": "./dist/extension-node.js",
   "browser": "./dist/extension-web.js",
-  "l10n": "./l10n",
   "contributes": {
     "configuration": {
       "type": "object",
-      "title": "%configuration.title%",
+      "title": "CodeTour",
       "properties": {
         "codetour.promptForWorkspaceTours": {
           "type": "boolean",
           "default": true,
-          "description": "%configuration.promptForWorkspaceTours%"
+          "description": "Specifies whether or not to display a notification when opening a workspace with tours for the first time."
+        },
+        "codetour.recordMode": {
+          "type": "string",
+          "enum": [
+            "lineNumber",
+            "pattern"
+          ],
+          "default": "lineNumber",
+          "description": "Specifies how the tour recorder will behave when capturing a new step."
         },
         "codetour.showMarkers": {
           "type": "boolean",
           "default": true,
-          "description": "%configuration.showMarkers%"
+          "description": "Specifies whether or not to show tour markers in the editor gutter."
         },
         "codetour.customTourDirectory": {
           "type": "string",
           "default": null,
-          "description": "%configuration.customTourDirectory%"
-        },
-        "codetour.autoUpdateAnchors": {
-          "type": "boolean",
-          "default": true,
-          "description": "%configuration.autoUpdateAnchors%"
+          "description": "Specifies a custom location to use when discovering tours."
         }
       }
     },
     "commands": [
       {
         "command": "codetour.addContentStep",
-        "title": "%command.addTourStep%",
+        "title": "Add Tour Step",
         "category": "CodeTour"
       },
       {
         "command": "codetour.addDirectoryStep",
-        "title": "%command.addTourStep%"
+        "title": "Add CodeTour Step"
       },
       {
         "command": "codetour.addSelectionStep",
-        "title": "%command.addContentMatchStep%"
-      },
-      {
-        "command": "codetour.addSymbolStep",
-        "title": "%command.addSymbolStep%"
+        "title": "Add CodeTour Step"
       },
       {
         "command": "codetour.addTourStep",
-        "title": "%command.addTourStep%"
+        "title": "Add Step to Tour"
       },
       {
         "command": "codetour.changeTourDescription",
-        "title": "%command.changeDescription%"
+        "title": "Change Description"
       },
       {
         "command": "codetour.changeTourRef",
-        "title": "%command.changeGitRef%"
+        "title": "Change Git Ref"
       },
       {
         "command": "codetour.changeTourStepLine",
-        "title": "%command.changeLine%"
+        "title": "Change Line"
       },
       {
         "command": "codetour.changeTourStepTitle",
-        "title": "%command.changeTitle%"
+        "title": "Change Title"
       },
       {
         "command": "codetour.changeTourStepIcon",
-        "title": "%command.changeIcon%"
+        "title": "Change Icon"
       },
       {
         "command": "codetour.changeTourTitle",
-        "title": "%command.changeTitle%"
+        "title": "Change Title"
       },
       {
         "command": "codetour.resetProgress",
-        "title": "%command.resetProgress%",
+        "title": "Reset Progress",
         "category": "CodeTour"
       },
       {
         "command": "codetour.resetTourProgress",
-        "title": "%command.resetProgress%"
+        "title": "Reset Progress"
       },
       {
         "command": "codetour.deleteTourStep",
-        "title": "%command.deleteStep%"
+        "title": "Delete Step"
       },
       {
         "command": "codetour.deleteTour",
-        "title": "%command.deleteTour%"
+        "title": "Delete Tour"
       },
       {
         "command": "codetour.editTourAtStep",
-        "title": "%command.editStep%"
-      },
-      {
-        "command": "codetour.rebindTourStepAnchor",
-        "title": "%command.rebindTourStepAnchor%",
-        "icon": "$(link)"
-      },
-      {
-        "command": "codetour.confirmAnchorRebind",
-        "title": "%command.confirmAnchorRebind%",
-        "icon": "$(check)"
-      },
-      {
-        "command": "codetour.cancelAnchorRebind",
-        "title": "%command.cancelAnchorRebind%",
-        "icon": "$(close)"
+        "title": "Edit Step"
       },
       {
         "command": "codetour.editTour",
-        "title": "%command.editTour%",
+        "title": "Edit Tour",
         "category": "CodeTour",
         "icon": "$(edit)"
       },
       {
         "command": "codetour.endTour",
-        "title": "%command.endTour%",
+        "title": "End Tour",
         "category": "CodeTour",
         "icon": "$(primitive-square)"
       },
       {
         "command": "codetour.exportTour",
-        "title": "%command.exportTour%"
+        "title": "Export Tour..."
       },
       {
         "command": "codetour.hideMarkers",
-        "title": "%command.hideMarkers%",
+        "title": "Hide Tour Markers",
         "category": "CodeTour",
         "icon": "$(eye-closed)"
       },
       {
         "command": "codetour.makeTourPrimary",
-        "title": "%command.makePrimary%"
+        "title": "Make Primary"
       },
       {
         "command": "codetour.moveTourStepForward",
-        "title": "%command.moveDown%",
+        "title": "Move Down",
         "icon": "$(arrow-down)"
       },
       {
         "command": "codetour.moveTourStepBack",
-        "title": "%command.moveUp%",
+        "title": "Move Up",
         "icon": "$(arrow-up)"
       },
       {
         "command": "codetour.nextTourStep",
-        "title": "%command.next%",
+        "title": "Next",
         "icon": "$(arrow-right)"
       },
       {
         "command": "codetour.openTourFile",
-        "title": "%command.openTourFile%",
+        "title": "Open Tour File...",
         "icon": "$(folder-opened)",
         "category": "CodeTour"
       },
       {
         "command": "codetour.openTourUrl",
-        "title": "%command.openTourUrl%",
+        "title": "Open Tour URL...",
         "category": "CodeTour"
       },
       {
-        "command": "codetour.openCodeTourPanel",
-        "title": "%command.openCodeTourPanel%",
-        "category": "CodeTour",
-        "icon": "$(list-tree)"
-      },
-      {
         "command": "codetour.previewTour",
-        "title": "%command.previewTour%",
+        "title": "Preview Tour",
         "icon": "$(preview)"
       },
       {
         "command": "codetour.previousTourStep",
-        "title": "%command.previous%",
+        "title": "Previous",
         "icon": "$(arrow-left)"
       },
       {
         "command": "codetour.recordTour",
-        "title": "%command.recordTour%",
+        "title": "Record Tour",
         "category": "CodeTour",
         "icon": "$(add)"
       },
       {
         "command": "codetour.resumeTour",
-        "title": "%command.resumeTour%",
+        "title": "Resume Tour",
         "category": "CodeTour"
       },
       {
         "command": "codetour.saveTourStep",
-        "title": "%command.saveStep%",
+        "title": "Save Step",
         "enablement": "!commentIsEmpty"
       },
       {
         "command": "codetour.showMarkers",
-        "title": "%command.showMarkers%",
+        "title": "Show Tour Markers",
         "category": "CodeTour",
         "icon": "$(eye)"
       },
       {
         "command": "codetour.startTour",
-        "title": "%command.startTour%",
+        "title": "Start Tour",
         "category": "CodeTour",
         "icon": "$(play)"
       },
       {
         "command": "codetour.unmakeTourPrimary",
-        "title": "%command.unmakePrimary%"
+        "title": "Unmake Primary"
       },
       {
         "command": "codetour.viewNotebook",
-        "title": "%command.viewNotebook%",
+        "title": "View Notebook",
         "category": "CodeTour"
       }
     ],
@@ -424,12 +401,7 @@
         {
           "command": "codetour.changeTourStepLine",
           "group": "mutate@1",
-          "when": "commentController == codetour && codetour:canEditTour && commentThread =~ /lineAnchor/"
-        },
-        {
-          "command": "codetour.rebindTourStepAnchor",
-          "group": "mutate@1",
-          "when": "commentController == codetour && codetour:canEditTour && commentThread =~ /resilientAnchor/"
+          "when": "commentController == codetour && codetour:canEditTour"
         },
         {
           "command": "codetour.deleteTourStep",
@@ -470,12 +442,12 @@
         {
           "command": "codetour.endTour",
           "when": "viewItem =~ /^codetour.tour(.recording)?.active/",
-          "group": "inline@2"
+          "group": "inline@1"
         },
         {
           "command": "codetour.startTour",
           "when": "viewItem =~ /^codetour.tour(.primary)?$/",
-          "group": "inline@2"
+          "group": "inline@1"
         },
         {
           "command": "codetour.resumeTour",
@@ -494,7 +466,7 @@
         },
         {
           "command": "codetour.viewNotebook",
-          "when": "viewItem =~ /^codetour.tour/",
+          "when": "false",
           "group": "basic@2"
         },
         {
@@ -534,8 +506,8 @@
         },
         {
           "command": "codetour.editTour",
-          "when": "viewItem =~ /^codetour.tour(.primary)?(.active)?$/ && !codetour:recording",
-          "group": "inline@1"
+          "when": "viewItem =~ /^codetour.tour(.primary)?(.active)?$/",
+          "group": "edit@2"
         },
         {
           "command": "codetour.previewTour",
@@ -589,13 +561,8 @@
         },
         {
           "command": "codetour.editTourAtStep",
-          "when": "viewItem =~ /^codetour.tourStep/ && !codetour:recording && !(viewItem =~ /unresolved/)",
+          "when": "viewItem =~ /^codetour.tourStep/ && !codetour:recording",
           "group": "manage@1"
-        },
-        {
-          "command": "codetour.rebindTourStepAnchor",
-          "when": "viewItem =~ /^codetour.tourStep.*unresolved/",
-          "group": "inline@1"
         },
         {
           "command": "codetour.deleteTourStep",
@@ -614,11 +581,6 @@
           "command": "codetour.addSelectionStep",
           "when": "codetour:recording && editorHasSelection",
           "group": "codetour@1"
-        },
-        {
-          "command": "codetour.addSymbolStep",
-          "when": "codetour:recording && editorHasDocumentSymbolProvider",
-          "group": "codetour@2"
         }
       ]
     },
@@ -626,7 +588,7 @@
       "explorer": [
         {
           "id": "codetour.tours",
-          "name": "%view.title%",
+          "name": "CodeTour",
           "when": "workspaceFolderCount != 0 || codetour:inTour"
         }
       ]
@@ -634,7 +596,7 @@
     "viewsWelcome": [
       {
         "view": "codetour.tours",
-        "contents": "%view.welcome%"
+        "contents": "In order to create a guided walkthrough, you can begin recording a tour for the currently opened workspace ([Learn More](https://github.com/vsls-contrib/codetour#recording-tours)).\n\n[Record Tour](command:codetour.recordTour)\n\nYou can also open tours that were shared with you by others ([Learn More](https://github.com/vsls-contrib/codetour#opening-tours)).\n\n[Open Tour File](command:codetour.openTourFile)\n\n[Open Tour URL](command:codetour.openTourUrl)"
       }
     ],
     "jsonValidation": [
@@ -677,9 +639,9 @@
         ]
       }
     ],
-    "notebooks": [
+    "notebookProvider": [
       {
-        "type": "codetour",
+        "viewType": "codetour",
         "displayName": "CodeTour",
         "selector": [
           {
@@ -693,7 +655,6 @@
     "@types/jexl": "^2.2.0",
     "axios": "^0.21.4",
     "jexl": "^2.3.0",
-    "jsonc-parser": "^3.3.1",
     "mobx": "^5.14.2",
     "os-browserify": "0.3.0",
     "path-browserify": "1.0.1",
@@ -701,15 +662,12 @@
     "vsls": "^1.0.2532"
   },
   "devDependencies": {
-    "@types/mocha": "^10.0.10",
     "@types/node": "^18.14.0",
     "@types/throttle-debounce": "^5.0.0",
-    "@types/vscode": "^1.73.0",
-    "@vscode/test-electron": "^2.5.2",
+    "@types/vscode": "^1.60",
     "@vscode/vsce": "^2.17.0",
     "debug": "^4.3.4",
     "eslint": "^8.34.0",
-    "mocha": "^11.7.5",
     "ts-loader": "^9.4.2",
     "typescript": "^4.9.5",
     "webpack": "^5.75.0",
@@ -718,8 +676,6 @@
   },
   "scripts": {
     "build": "webpack --mode production",
-    "compile-tests": "tsc -p ./tsconfig.test.json",
-    "test": "npm run build && npm run compile-tests && node ./out/test/runTest.js",
     "vscode:prepublish": "npm run build",
     "watch": "webpack --mode development --watch",
     "package": "vsce package"

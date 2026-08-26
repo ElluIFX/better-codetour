@@ -1,9 +1,7 @@
 import * as vscode from "vscode";
 import { onDidEndTour, onDidStartTour } from "../store/actions";
 
-export async function registerCodeStatusModule(
-  context: vscode.ExtensionContext
-) {
+export async function registerCodeStatusModule() {
   const extension = vscode.extensions.getExtension("lostintangent.codestatus");
   if (!extension) {
     return;
@@ -14,15 +12,12 @@ export async function registerCodeStatusModule(
   }
 
   let statusDisposable: vscode.Disposable;
-  const startDisposable = onDidStartTour(async ([tour, stepNumber]) => {
+  onDidStartTour(async ([tour, stepNumber]) => {
     const disposeable = await extension.exports.updateStatus({
       emoji: "🗺️",
-      message: vscode.l10n.t(
-        "CodeTour: {0} (#{1} of {2})",
-        tour.title,
-        stepNumber + 1,
+      message: `CodeTour: ${tour.title} (#${stepNumber + 1} of ${
         tour.steps.length
-      ),
+      })`,
       limitedAvailability: true
     });
 
@@ -31,8 +26,5 @@ export async function registerCodeStatusModule(
     }
   });
 
-  const endDisposable = onDidEndTour(
-    () => statusDisposable && statusDisposable.dispose()
-  );
-  context.subscriptions.push(startDisposable, endDisposable);
+  onDidEndTour(() => statusDisposable && statusDisposable.dispose());
 }
