@@ -2,9 +2,11 @@
 // Licensed under the MIT License.
 
 import * as vscode from "vscode";
+import { anchorResolver } from "./anchors";
 import { initializeApi } from "./api";
 import { initializeGitApi } from "./git";
 import { registerLiveShareModule } from "./liveShare";
+import { registerNotebookProvider } from "./notebook";
 import { registerPlayerModule } from "./player";
 import { registerRecorderModule } from "./recorder";
 import { store } from "./store";
@@ -13,7 +15,11 @@ import {
   startCodeTour,
   startDefaultTour
 } from "./store/actions";
-import { discoverTours as _discoverTours } from "./store/provider";
+import {
+  discoverTours as _discoverTours,
+  registerTourProvider
+} from "./store/provider";
+import { initializeTourPersistence } from "./store/persistence";
 
 /**
  * In order to check whether the URI handler was called on activation,
@@ -75,9 +81,15 @@ class URIHandler implements vscode.UriHandler {
 }
 
 export async function activate(context: vscode.ExtensionContext) {
+  initializeTourPersistence(context);
+  registerTourProvider(context);
   registerPlayerModule(context);
-  registerRecorderModule();
-  registerLiveShareModule();
+  registerRecorderModule(context);
+  registerNotebookProvider(context);
+  void registerLiveShareModule(context).catch(error =>
+    console.warn("Unable to register CodeTour Live Share.", error)
+  );
+  anchorResolver.register(context);
 
   const uriHandler = new URIHandler();
   context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));

@@ -1,7 +1,7 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { Uri } from "vscode";
+import { Disposable, Uri } from "vscode";
 import { LiveShare, Role, SharedService, SharedServiceProxy } from "vsls";
 import {
   endCurrentCodeTour,
@@ -23,42 +23,67 @@ export default function (
   service: SharedService | SharedServiceProxy
 ) {
   const peer = api.session.peerNumber;
+  const disposables: Disposable[] = [];
 
-  onDidEndTour(() => {
-    service.notify(TOUR_ENDED_NOTIFICATION, { peer });
-  });
+  disposables.push(
+    onDidEndTour(() => {
+      service.notify(TOUR_ENDED_NOTIFICATION, { peer });
+    })
+  );
 
   service.onNotify(TOUR_ENDED_NOTIFICATION, (message: Message) => {
     if (message.peer === peer) return;
 
-    endCurrentCodeTour(false);
-    service.notify(TOUR_ENDED_NOTIFICATION, message);
-  });
-
-  onDidStartTour(([tour, stepNumber]) => {
-    const newTour = { ...tour };
-
+    void endCurrentCodeTour(false);
     if (api.session.role === Role.Host) {
-      newTour.id = api.convertLocalUriToShared(Uri.parse(tour.id)).toString();
-    } else {
-      newTour.id = api.convertSharedUriToLocal(Uri.parse(tour.id)).toString();
+      service.notify(TOUR_ENDED_NOTIFICATION, message);
     }
-
-    const message = {
-      peer,
-      data: {
-        tour: newTour,
-        stepNumber
-      }
-    };
-
-    service.notify(TOUR_STARTED_NOTIFICATION, message);
   });
+
+  disposables.push(
+    onDidStartTour(([tour, stepNumber]) => {
+      const newTour = { ...tour };
+
+      if (api.session.role === Role.Host) {
+        newTour.id = api.convertLocalUriToShared(Uri.parse(tour.id)).toString();
+      }
+
+      const message = {
+        peer,
+        data: {
+          tour: newTour,
+          stepNumber
+        }
+      };
+
+      service.notify(TOUR_STARTED_NOTIFICATION, message);
+    })
+  );
 
   service.onNotify(TOUR_STARTED_NOTIFICATION, (message: Message) => {
     if (message.peer === peer) return;
 
-    startCodeTour(message.data.tour, message.data.stepNumber);
-    service.notify(TOUR_STARTED_NOTIFICATION, message);
+    const incomingTour = { ...message.data.tour };
+    if (api.session.role === Role.Host) {
+      incomingTour.id = api
+        .convertSharedUriToLocal(Uri.parse(incomingTour.id))
+        .toString();
+    }
+    startCodeTour(
+      incomingTour,
+      message.data.stepNumber,
+      undefined,
+      false,
+      true,
+      undefined,
+      false
+    );
+    if (api.session.role === Role.Host) {
+      service.notify(TOUR_STARTED_NOTIFICATION, message);
+    }
   });
+
+  return new Disposable(() =>
+    disposables.forEach(disposable => disposable.dispose())
+  );
 }

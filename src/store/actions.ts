@@ -4,14 +4,16 @@
 import {
   commands,
   EventEmitter,
+  l10n,
   Memento,
+  RelativePattern,
   Uri,
   window,
   workspace
 } from "vscode";
 import { CodeTour, store } from ".";
 import { EXTENSION_NAME, FS_SCHEME, FS_SCHEME_CONTENT } from "../constants";
-import { startPlayer, stopPlayer } from "../player";
+import { refreshCommentingRanges, startPlayer, stopPlayer } from "../player";
 import {
   getStepFileUri,
   getWorkspaceKey,
@@ -19,6 +21,7 @@ import {
   readUriContents
 } from "../utils";
 import { progress } from "./storage";
+import { ensureTourSchema, getTourSchemaReference } from "./persistence";
 
 const CAN_EDIT_TOUR_KEY = `${EXTENSION_NAME}:canEditTour`;
 const IN_TOUR_KEY = `${EXTENSION_NAME}:inTour`;
@@ -46,7 +49,8 @@ export function startCodeTour(
   workspaceRoot?: Uri,
   startInEditMode: boolean = false,
   canEditTour: boolean = true,
-  tours?: CodeTour[]
+  tours?: CodeTour[],
+  fireEvent: boolean = true
 ) {
   startPlayer();
 
@@ -54,7 +58,8 @@ export function startCodeTour(
     workspaceRoot = getWorkspaceUri(tour);
   }
 
-  const step = stepNumber ? stepNumber : tour.steps.length ? 0 : -1;
+  const step =
+    stepNumber !== undefined ? stepNumber : tour.steps.length ? 0 : -1;
   store.activeTour = {
     tour,
     step,
@@ -71,7 +76,8 @@ export function startCodeTour(
     store.isEditing = true;
     commands.executeCommand("setContext", RECORDING_KEY, true);
     commands.executeCommand("setContext", EDITING_KEY, true);
-  } else {
+    refreshCommentingRanges();
+  } else if (fireEvent) {
     _onDidStartTour.fire([tour, step]);
   }
 }
@@ -93,11 +99,11 @@ export async function selectTour(
   }
 
   const response = await window.showQuickPick(items, {
-    placeHolder: "Select the tour to start..."
+    placeHolder: l10n.t("Select the tour to start...")
   });
 
   if (response) {
-    startCodeTour(response.tour, 0, workspaceRoot, false, true, tours);
+    startCodeTour(response.tour, step, workspaceRoot, false, true, tours);
     return true;
   }
 
@@ -105,6 +111,9 @@ export async function selectTour(
 }
 
 export async function endCurrentCodeTour(fireEvent: boolean = true) {
+  if (!store.activeTour) {
+    return;
+  }
   if (fireEvent) {
     _onDidEndTour.fire(store.activeTour!.tour);
   }
@@ -132,12 +141,21 @@ export async function endCurrentCodeTour(fireEvent: boolean = true) {
 }
 
 export function moveCurrentCodeTourBackward() {
-  --store.activeTour!.step;
+  if (!store.activeTour || store.activeTour.step <= 0) {
+    return;
+  }
+  --store.activeTour.step;
 
-  _onDidStartTour.fire([store.activeTour!.tour, store.activeTour!.step]);
+  _onDidStartTour.fire([store.activeTour.tour, store.activeTour.step]);
 }
 
 export async function moveCurrentCodeTourForward() {
+  if (
+    !store.activeTour ||
+    store.activeTour.step >= store.activeTour.tour.steps.length - 1
+  ) {
+    return;
+  }
   await progress.update();
 
   store.activeTour!.step++;
@@ -146,7 +164,11 @@ export async function moveCurrentCodeTourForward() {
 }
 
 async function isCodeSwingWorkspace(uri: Uri) {
-  const files = await workspace.findFiles("codeswing.json");
+  const files = await workspace.findFiles(
+    new RelativePattern(uri, "codeswing.json"),
+    undefined,
+    1
+  );
   return files && files.length > 0;
 }
 
@@ -170,14 +192,16 @@ export async function promptForTour(
     workspace
       .getConfiguration(EXTENSION_NAME)
       .get("promptForWorkspaceTours", true) &&
-    !isCodeSwingWorkspace(workspaceRoot)
+    !(await isCodeSwingWorkspace(workspaceRoot))
   ) {
     globalState.update(key, true);
 
     if (
       await window.showInformationMessage(
-        "This workspace has guided tours you can take to get familiar with the codebase.",
-        "Start CodeTour"
+        l10n.t(
+          "This workspace contains guided tours that introduce the codebase."
+        ),
+        l10n.t("Start CodeTour")
       )
     ) {
       startDefaultTour(workspaceRoot, tours);
@@ -208,23 +232,30 @@ export async function startDefaultTour(
   }
 }
 
-export async function exportTour(tour: CodeTour) {
+export async function exportTour(tour: CodeTour, targetUri: Uri) {
+  await ensureTourSchema(targetUri);
+  const { $schema: _schema, id: _id, ref: _ref, ...tourData } = tour;
   const newTour: Partial<CodeTour> = {
-    ...tour
+    $schema: getTourSchemaReference(targetUri),
+    ...tourData
   };
 
   if (newTour.steps) {
     newTour.steps = await Promise.all(
-      newTour.steps.map(async step => {
-        if (step.contents || step.uri || !step.file) {
+      newTour.steps.map(async (step, stepNumber) => {
+        if (step.contents !== undefined || step.uri || !step.file) {
           return step;
         }
 
         const workspaceRoot = getWorkspaceUri(tour);
-        const stepFileUri = await getStepFileUri(step, workspaceRoot, tour.ref);
+        const stepFileUri = await getStepFileUri(
+          step,
+          workspaceRoot,
+          tour.ref,
+          tour,
+          stepNumber
+        );
         const contents = await readUriContents(stepFileUri);
-
-        delete step.markerTitle;
 
         return {
           ...step,
@@ -233,9 +264,6 @@ export async function exportTour(tour: CodeTour) {
       })
     );
   }
-
-  delete newTour.id;
-  delete newTour.ref;
 
   return JSON.stringify(newTour, null, 2);
 }

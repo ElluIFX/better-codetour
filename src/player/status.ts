@@ -22,8 +22,8 @@ function createCurrentTourItem() {
 }
 
 let currentTourItem: vscode.StatusBarItem | null = null;
-export function registerStatusBar() {
-  reaction(
+export function registerStatusBar(context: vscode.ExtensionContext) {
+  const disposeReaction = reaction(
     // @ts-ignore
     () => [
       store.activeTour
@@ -41,12 +41,16 @@ export function registerStatusBar() {
           currentTourItem = createCurrentTourItem();
         }
 
-        const prefix = store.isRecording ? "Recording " : "";
         const tourTitle = getTourTitle(store.activeTour.tour);
-
-        currentTourItem.text = `${prefix}CodeTour: #${
-          store.activeTour.step + 1
-        } of ${store.activeTour.tour.steps.length} (${tourTitle})`;
+        const progress = vscode.l10n.t(
+          "CodeTour: #{0} of {1} ({2})",
+          store.activeTour.step + 1,
+          store.activeTour.tour.steps.length,
+          tourTitle
+        );
+        currentTourItem.text = store.isRecording
+          ? vscode.l10n.t("Recording {0}", progress)
+          : progress;
       } else {
         if (currentTourItem) {
           currentTourItem.dispose();
@@ -55,4 +59,5 @@ export function registerStatusBar() {
       }
     }
   );
+  context.subscriptions.push({ dispose: disposeReaction });
 }

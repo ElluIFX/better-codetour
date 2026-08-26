@@ -7,42 +7,59 @@ import {
   Event,
   EventEmitter,
   FileChangeEvent,
+  FileChangeType,
   FileStat,
   FileSystemError,
   FileSystemProvider,
   FileType,
+  ExtensionContext,
   Uri,
   workspace
 } from "vscode";
 import { FS_SCHEME } from "../../constants";
 import { CodeTour, CodeTourStep, store } from "../../store";
+import { saveTour } from "../../store/persistence";
 
 export class CodeTourFileSystemProvider implements FileSystemProvider {
   private count = 0;
 
-  getCurrentTourStep(): [CodeTour, CodeTourStep] {
-    const tour = store.activeTour!.tour;
-    return [tour, tour.steps[store.activeTour!.step]];
+  getTourStep(uri: Uri): [CodeTour, CodeTourStep] {
+    const params = new URLSearchParams(uri.query);
+    const tourId = params.get("tour");
+    const stepNumber = Number(params.get("step"));
+    const tours = [
+      ...(store.activeTour ? [store.activeTour.tour] : []),
+      ...(store.activeTour?.tours || []),
+      ...store.tours
+    ];
+    const tour = tours.find(candidate => candidate.id === tourId);
+    if (
+      !tour ||
+      !Number.isInteger(stepNumber) ||
+      stepNumber < 0 ||
+      stepNumber >= tour.steps.length
+    ) {
+      throw FileSystemError.FileNotFound(uri);
+    }
+    const step = tour.steps[stepNumber];
+    if (step.contents === undefined) {
+      throw FileSystemError.FileNotFound(uri);
+    }
+    return [tour, step];
   }
 
-  updateTour(tour: CodeTour) {
-    const tourUri = Uri.parse(tour.id);
-
-    const newTour: Partial<CodeTour> = {
-      ...tour
-    };
-    delete newTour.id;
-    newTour.steps?.forEach(step => {
-      delete step.markerTitle;
-    });
-
-    const contents = JSON.stringify(newTour, null, 2);
-    const bytes = new TextEncoder().encode(contents);
-    workspace.fs.writeFile(tourUri, bytes);
+  async updateTour(tour: CodeTour, changedUri: Uri): Promise<void> {
+    await saveTour(tour);
+    this._onDidChangeFile.fire([
+      {
+        type: FileChangeType.Changed,
+        uri: changedUri
+      }
+    ]);
   }
 
   async readFile(uri: Uri): Promise<Uint8Array> {
-    const [, { contents }] = this.getCurrentTourStep();
+    const [, { contents }] = this.getTourStep(uri);
     return new TextEncoder().encode(contents);
   }
 
@@ -51,17 +68,18 @@ export class CodeTourFileSystemProvider implements FileSystemProvider {
     content: Uint8Array,
     options: { create: boolean; overwrite: boolean }
   ): Promise<void> {
-    const [tour, step] = this.getCurrentTourStep();
-    step.contents = content.toString();
-    this.updateTour(tour);
+    const [tour, step] = this.getTourStep(uri);
+    step.contents = new TextDecoder().decode(content);
+    await this.updateTour(tour, uri);
   }
 
   async stat(uri: Uri): Promise<FileStat> {
+    const [, step] = this.getTourStep(uri);
     return {
       type: FileType.File,
       ctime: 0,
       mtime: ++this.count,
-      size: 100
+      size: new TextEncoder().encode(step.contents).length
     };
   }
 
@@ -70,16 +88,16 @@ export class CodeTourFileSystemProvider implements FileSystemProvider {
     newUri: Uri,
     options: { overwrite: boolean }
   ): Promise<void> {
-    const [tour, step] = this.getCurrentTourStep();
-    step.file = path.basename(newUri.toString());
-    this.updateTour(tour);
+    const [tour, step] = this.getTourStep(oldUri);
+    step.file = path.basename(newUri.path);
+    await this.updateTour(tour, newUri);
   }
 
   // Unimplemented members
 
   private _onDidChangeFile = new EventEmitter<FileChangeEvent[]>();
-  public readonly onDidChangeFile: Event<FileChangeEvent[]> = this
-    ._onDidChangeFile.event;
+  public readonly onDidChangeFile: Event<FileChangeEvent[]> =
+    this._onDidChangeFile.event;
 
   async copy?(
     source: Uri,
@@ -111,15 +129,15 @@ export class CodeTourFileSystemProvider implements FileSystemProvider {
     uri: Uri,
     options: { recursive: boolean; excludes: string[] }
   ): Disposable {
-    throw FileSystemError.NoPermissions(
-      "CodeTour doesn't support watching files."
-    );
+    return new Disposable(() => undefined);
   }
 }
 
-export function registerFileSystemProvider() {
-  workspace.registerFileSystemProvider(
-    FS_SCHEME,
-    new CodeTourFileSystemProvider()
+export function registerFileSystemProvider(context: ExtensionContext) {
+  context.subscriptions.push(
+    workspace.registerFileSystemProvider(
+      FS_SCHEME,
+      new CodeTourFileSystemProvider()
+    )
   );
 }

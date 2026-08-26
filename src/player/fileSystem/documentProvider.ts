@@ -16,9 +16,13 @@ class CodeTourTextDocumentContentProvider
   }
 }
 
-export function registerTextDocumentContentProvider() {
-  vscode.workspace.registerTextDocumentContentProvider(
-    FS_SCHEME_CONTENT,
-    new CodeTourTextDocumentContentProvider()
+export function registerTextDocumentContentProvider(
+  context: vscode.ExtensionContext
+) {
+  context.subscriptions.push(
+    vscode.workspace.registerTextDocumentContentProvider(
+      FS_SCHEME_CONTENT,
+      new CodeTourTextDocumentContentProvider()
+    )
   );
 }

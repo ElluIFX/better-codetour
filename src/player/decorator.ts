@@ -3,6 +3,7 @@
 
 import { reaction } from "mobx";
 import * as vscode from "vscode";
+import { anchorResolver } from "../anchors";
 import { FS_SCHEME_CONTENT, ICON_URL } from "../constants";
 import { CodeTourStepTuple, store } from "../store";
 import { getStepFileUri, getWorkspaceUri } from "../utils";
@@ -20,30 +21,45 @@ const TOUR_DECORATOR = vscode.window.createTextEditorDecorationType({
 export async function getTourSteps(
   editor: vscode.TextEditor
 ): Promise<CodeTourStepTuple[]> {
-  const steps: CodeTourStepTuple[] = store.tours.flatMap(tour =>
+  const knownTours = [
+    ...(store.activeTour ? [store.activeTour.tour] : []),
+    ...(store.activeTour?.tours || []),
+    ...store.tours
+  ].filter(
+    (tour, index, tours) =>
+      tours.findIndex(candidate => candidate.id === tour.id) === index
+  );
+  const steps: CodeTourStepTuple[] = knownTours.flatMap(tour =>
     tour.steps.map(
       (step, stepNumber) => [tour, step, stepNumber] as CodeTourStepTuple
     )
   );
 
-  const contents = editor.document.getText();
   const tourSteps = await Promise.all(
     steps.map(async ([tour, step, stepNumber]) => {
-      const workspaceRoot = getWorkspaceUri(tour);
-      const uri = await getStepFileUri(step, workspaceRoot);
+      const workspaceRoot =
+        store.activeTour &&
+        (store.activeTour.tour.id === tour.id ||
+          store.activeTour.tours?.some(candidate => candidate.id === tour.id))
+          ? store.activeTour.workspaceRoot || getWorkspaceUri(tour)
+          : getWorkspaceUri(tour);
+      const anchorResolution = step.anchor
+        ? anchorResolver.get(tour, stepNumber) ||
+          (await anchorResolver.resolveStep(tour, stepNumber))
+        : undefined;
+      const uri =
+        anchorResolution?.uri ||
+        (await getStepFileUri(step, workspaceRoot, tour.ref, tour, stepNumber));
 
       if (uri.toString().localeCompare(editor.document.uri.toString()) === 0) {
-        let line;
-        if (step.line) {
-          line = step.line - 1;
-        } else if (step.pattern) {
-          const match = contents.match(new RegExp(step.pattern, "m"));
-          if (match) {
-            line = editor.document.positionAt(match.index!).line;
-          }
+        const line = anchorResolution?.range?.start.line;
+        if (step.anchor && anchorResolution?.state !== "resolved") {
+          return;
         }
 
-        return [tour, step, stepNumber, line];
+        if (line !== undefined) {
+          return [tour, step, stepNumber, line];
+        }
       }
     })
   );
@@ -69,9 +85,11 @@ function registerHoverProvider() {
       const hovers = tourSteps.map(([tour, _, stepNumber]) => {
         const args = encodeURIComponent(JSON.stringify([tour.id, stepNumber]));
         const command = `command:codetour._startTourById?${args}`;
-        return `CodeTour: ${tour.title} (Step #${
+        const startTour = vscode.l10n.t("Start Tour");
+        return `CodeTour: ${tour.title} (${vscode.l10n.t(
+          "Step #{0}",
           stepNumber + 1
-        }) &nbsp;[Start Tour](${command} "Start Tour")\n`;
+        )}) &nbsp;[${startTour}](${command} "${startTour}")\n`;
       });
 
       const content = new vscode.MarkdownString(hovers.join("\n"));
@@ -81,14 +99,27 @@ function registerHoverProvider() {
   });
 }
 
+let decorationGeneration = 0;
 export async function updateDecorations(
   editor: vscode.TextEditor | undefined = vscode.window.activeTextEditor
 ) {
+  const generation = ++decorationGeneration;
   if (!editor || DISABLED_SCHEMES.includes(editor.document.uri.scheme)) {
+    if (editor) {
+      clearDecorations(editor);
+    }
     return;
   }
 
-  store.activeEditorSteps = await getTourSteps(editor);
+  const steps = await getTourSteps(editor);
+  if (
+    generation !== decorationGeneration ||
+    vscode.window.activeTextEditor?.document.uri.toString() !==
+      editor.document.uri.toString()
+  ) {
+    return;
+  }
+  store.activeEditorSteps = steps;
   if (store.activeEditorSteps.length === 0) {
     return clearDecorations(editor);
   }
@@ -104,12 +135,14 @@ function clearDecorations(editor: vscode.TextEditor) {
   editor.setDecorations(TOUR_DECORATOR, []);
 }
 
-let disposables: vscode.Disposable[] = [];
-export async function registerDecorators() {
-  reaction(
+export async function registerDecorators(context: vscode.ExtensionContext) {
+  const disposeReaction = reaction(
     () => [
       store.showMarkers,
-      store.tours.map(tour => [tour.title, tour.steps])
+      store.tours.map(tour => [
+        tour.title,
+        tour.steps.map(step => [step.file, step.anchor])
+      ])
     ],
     () => {
       const activeEditor = vscode.window.activeTextEditor;
@@ -117,26 +150,15 @@ export async function registerDecorators() {
       if (store.showMarkers) {
         if (hoverProviderDisposable === undefined) {
           hoverProviderDisposable = registerHoverProvider();
-          disposables.push(hoverProviderDisposable);
         }
-
-        disposables.push(
-          vscode.window.onDidChangeActiveTextEditor(editor => {
-            if (editor) {
-              updateDecorations(editor);
-            }
-          })
-        );
 
         if (activeEditor) {
-          updateDecorations(activeEditor);
+          void updateDecorations(activeEditor);
         }
-      } else if (activeEditor) {
-        clearDecorations(activeEditor);
-
-        disposables.forEach(disposable => disposable.dispose());
+      } else {
+        vscode.window.visibleTextEditors.forEach(clearDecorations);
+        hoverProviderDisposable?.dispose();
         hoverProviderDisposable = undefined;
-        disposables = [];
       }
     }
   );
@@ -149,5 +171,37 @@ export async function registerDecorators() {
     "setContext",
     "codetour:showingMarkers",
     store.showMarkers
+  );
+
+  context.subscriptions.push(
+    { dispose: disposeReaction },
+    vscode.window.onDidChangeActiveTextEditor(editor => {
+      if (editor && store.showMarkers) {
+        void updateDecorations(editor);
+      }
+    }),
+    anchorResolver.onDidChange(() => {
+      if (store.showMarkers && vscode.window.activeTextEditor) {
+        void updateDecorations(vscode.window.activeTextEditor);
+      }
+    }),
+    vscode.workspace.onDidChangeConfiguration(event => {
+      if (!event.affectsConfiguration("codetour.showMarkers")) {
+        return;
+      }
+      store.showMarkers = vscode.workspace
+        .getConfiguration("codetour")
+        .get("showMarkers", true);
+      void vscode.commands.executeCommand(
+        "setContext",
+        "codetour:showingMarkers",
+        store.showMarkers
+      );
+    }),
+    {
+      dispose() {
+        hoverProviderDisposable?.dispose();
+      }
+    }
   );
 }
