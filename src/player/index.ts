@@ -17,6 +17,7 @@ import {
   Range,
   Selection,
   TextDocument,
+  TextEditorSelectionChangeKind,
   TextEditorRevealType,
   Uri,
   window,
@@ -162,6 +163,24 @@ export class CodeTourComment implements Comment {
 let controller: CommentController | null;
 let renderGeneration = 0;
 let lastUnresolvedNotice: string | undefined;
+const recordingSelections = new Map<string, Selection>();
+
+export function getRecordingSelection(uri: Uri, line: number) {
+  const key = uri.toString();
+  const selection = recordingSelections.get(key);
+  recordingSelections.delete(key);
+  if (!selection || selection.isEmpty) {
+    return undefined;
+  }
+
+  const endLine =
+    selection.end.character === 0 && selection.end.line > selection.start.line
+      ? selection.end.line - 1
+      : selection.end.line;
+  return line >= selection.start.line && line <= endLine
+    ? selection
+    : undefined;
+}
 
 export async function focusPlayer() {
   const currentThread = store.activeTour!.thread!;
@@ -169,40 +188,14 @@ export async function focusPlayer() {
 }
 
 export function getRecordingCommentingRanges(
-  document: TextDocument,
-  selection?: Selection
+  document: TextDocument
 ) {
-  if (!selection || selection.isEmpty) {
-    return [
-      new Range(
-        document.lineAt(0).range.start,
-        document.lineAt(document.lineCount - 1).range.end
-      )
-    ];
-  }
-
-  const selectedEndLine =
-    selection.end.character === 0 && selection.end.line > selection.start.line
-      ? selection.end.line - 1
-      : selection.end.line;
-  const ranges = [selection];
-  if (selection.start.line > 0) {
-    ranges.push(
-      new Selection(
-        document.lineAt(0).range.start,
-        document.lineAt(selection.start.line - 1).range.end
-      )
-    );
-  }
-  if (selectedEndLine < document.lineCount - 1) {
-    ranges.push(
-      new Selection(
-        document.lineAt(selectedEndLine + 1).range.start,
-        document.lineAt(document.lineCount - 1).range.end
-      )
-    );
-  }
-  return ranges;
+  return [
+    new Range(
+      document.lineAt(0).range.start,
+      document.lineAt(document.lineCount - 1).range.end
+    )
+  ];
 }
 
 function updateCommentingRangeProvider() {
@@ -214,11 +207,7 @@ function updateCommentingRangeProvider() {
       if (!store.isRecording) {
         return null;
       }
-      const editor = window.visibleTextEditors.find(
-        candidate =>
-          candidate.document.uri.toString() === document.uri.toString()
-      );
-      return getRecordingCommentingRanges(document, editor?.selection);
+      return getRecordingCommentingRanges(document);
     }
   };
 }
@@ -253,6 +242,7 @@ export async function stopPlayer() {
   if (store.activeTour) {
     store.activeTour.thread = null;
   }
+  recordingSelections.clear();
 }
 
 const VIEW_COMMANDS = new Map([
@@ -621,9 +611,23 @@ export function registerPlayerModule(context: ExtensionContext) {
   initializeStorage(context);
 
   context.subscriptions.push(
-    window.onDidChangeTextEditorSelection(() => {
-      if (store.isRecording) {
-        updateCommentingRangeProvider();
+    window.onDidChangeTextEditorSelection(event => {
+      const key = event.textEditor.document.uri.toString();
+      if (!store.isRecording) {
+        recordingSelections.delete(key);
+      } else if (!event.textEditor.selection.isEmpty) {
+        recordingSelections.set(key, event.textEditor.selection);
+      } else {
+        const cached = recordingSelections.get(key);
+        const line = event.textEditor.selection.active.line;
+        if (
+          event.kind !== TextEditorSelectionChangeKind.Mouse ||
+          !cached ||
+          line < cached.start.line ||
+          line > cached.end.line
+        ) {
+          recordingSelections.delete(key);
+        }
       }
     }),
     anchorResolver.onDidChange(() => {

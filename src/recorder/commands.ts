@@ -8,7 +8,7 @@ import { workspace } from "vscode";
 import { anchorResolver } from "../anchors";
 import { EXTENSION_NAME, FS_SCHEME_CONTENT } from "../constants";
 import { api, RefType } from "../git";
-import { CodeTourComment } from "../player";
+import { CodeTourComment, getRecordingSelection } from "../player";
 import { CodeTourNode, CodeTourStepNode } from "../player/tree/nodes";
 import { CodeTour, CodeTourStep, store } from "../store";
 import { saveTour } from "../store/persistence";
@@ -431,10 +431,14 @@ export function registerRecorderCommands() {
       };
 
       const selected = getNonEmptySelection(thread!.uri);
+      const cachedSelection = getRecordingSelection(
+        thread!.uri,
+        thread!.range.start.line
+      );
       step.anchor = getGutterStepAnchor(
         selected?.editor.document ||
           (await workspace.openTextDocument(thread!.uri)),
-        selected?.selection,
+        selected?.selection || cachedSelection,
         thread!.range.start.line
       );
 
