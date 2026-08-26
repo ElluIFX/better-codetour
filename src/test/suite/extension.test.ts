@@ -4,7 +4,11 @@
 import * as assert from "assert";
 import * as vscode from "vscode";
 import { anchorResolver } from "../../anchors";
-import { getRecordingCommentingRanges } from "../../player";
+import {
+  getRecordingCommentingRanges,
+  getRecordingSelection,
+  trackRecordingSelection
+} from "../../player";
 import { CodeTourFileSystemProvider } from "../../player/fileSystem";
 import { getGutterStepAnchor } from "../../recorder/commands";
 import { CodeTour, store } from "../../store";
@@ -169,6 +173,40 @@ describe("resilient tour anchors", () => {
     assert.strictEqual(ranges.length, 1);
     assert.strictEqual(ranges[0].start.line, 0);
     assert.strictEqual(ranges[0].end.line, document.lineCount - 1);
+  });
+
+  it("keeps the selected content when the gutter click collapses it", async () => {
+    const document = await vscode.workspace.openTextDocument(
+      vscode.Uri.joinPath(getWorkspaceRoot(), "sample.txt")
+    );
+    const editor = await vscode.window.showTextDocument(document);
+    const previousRecordingState = store.isRecording;
+    const selection = new vscode.Selection(0, 0, 1, 4);
+    const selectionDisposable = vscode.window.onDidChangeTextEditorSelection(
+      trackRecordingSelection
+    );
+    getRecordingSelection(document.uri, 0);
+
+    try {
+      store.isRecording = true;
+      editor.selection = selection;
+      await new Promise(resolve => setTimeout(resolve, 50));
+      editor.selection = new vscode.Selection(0, 0, 0, 0);
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const cachedSelection = getRecordingSelection(document.uri, 0);
+      assert.ok(cachedSelection?.isEqual(selection));
+      assert.deepStrictEqual(
+        getGutterStepAnchor(document, cachedSelection, 0),
+        {
+          type: "content",
+          text: "alpha\nbeta"
+        }
+      );
+    } finally {
+      selectionDisposable.dispose();
+      store.isRecording = previousRecordingState;
+    }
   });
 
   it("selects content or line anchors for the corresponding gutter plus", async () => {

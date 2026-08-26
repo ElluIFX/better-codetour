@@ -3,7 +3,7 @@
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
   "publisher": "ElluIFX",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": {
     "name": "ElluIFX",
     "url": "https://github.com/ElluIFX"

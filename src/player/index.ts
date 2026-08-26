@@ -17,7 +17,7 @@ import {
   Range,
   Selection,
   TextDocument,
-  TextEditorSelectionChangeKind,
+  TextEditorSelectionChangeEvent,
   TextEditorRevealType,
   Uri,
   window,
@@ -178,6 +178,24 @@ export function getRecordingSelection(uri: Uri, line: number) {
   return line >= selection.start.line && line <= endLine
     ? selection
     : undefined;
+}
+
+export function trackRecordingSelection(
+  event: TextEditorSelectionChangeEvent
+) {
+  const key = event.textEditor.document.uri.toString();
+  const selection = event.selections[0];
+  if (!store.isRecording) {
+    recordingSelections.delete(key);
+  } else if (!selection.isEmpty) {
+    recordingSelections.set(key, selection);
+  } else {
+    const cached = recordingSelections.get(key);
+    const line = selection.active.line;
+    if (!cached || line < cached.start.line || line > cached.end.line) {
+      recordingSelections.delete(key);
+    }
+  }
 }
 
 export async function focusPlayer() {
@@ -613,25 +631,7 @@ export function registerPlayerModule(context: ExtensionContext) {
   initializeStorage(context);
 
   context.subscriptions.push(
-    window.onDidChangeTextEditorSelection(event => {
-      const key = event.textEditor.document.uri.toString();
-      if (!store.isRecording) {
-        recordingSelections.delete(key);
-      } else if (!event.textEditor.selection.isEmpty) {
-        recordingSelections.set(key, event.textEditor.selection);
-      } else {
-        const cached = recordingSelections.get(key);
-        const line = event.textEditor.selection.active.line;
-        if (
-          event.kind !== TextEditorSelectionChangeKind.Mouse ||
-          !cached ||
-          line < cached.start.line ||
-          line > cached.end.line
-        ) {
-          recordingSelections.delete(key);
-        }
-      }
-    }),
+    window.onDidChangeTextEditorSelection(trackRecordingSelection),
     anchorResolver.onDidChange(() => {
       if (!store.activeTour || store.activeTour.step < 0) {
         return;
