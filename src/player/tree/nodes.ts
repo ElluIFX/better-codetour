@@ -2,12 +2,14 @@
 // Licensed under the MIT License.
 
 import {
+  l10n,
   ThemeColor,
   ThemeIcon,
   TreeItem,
   TreeItemCollapsibleState,
   Uri
 } from "vscode";
+import { anchorResolver } from "../../anchors";
 import { CONTENT_URI, EXTENSION_NAME, FS_SCHEME } from "../../constants";
 import { CodeTour, store } from "../../store";
 import { progress } from "../../store/storage";
@@ -37,13 +39,13 @@ export class CodeTourNode extends TreeItem {
     );
 
     this.tooltip = tour.description;
-    this.description = `${tour.steps.length} steps`;
+    this.description = l10n.t("{0} steps", tour.steps.length);
 
     const contextValues = ["codetour.tour"];
 
     if (tour.isPrimary) {
       contextValues.push("primary");
-      this.description += " (Primary)";
+      this.description += l10n.t(" (Primary)");
     }
 
     if (isRecording(tour)) {
@@ -72,6 +74,13 @@ export class CodeTourStepNode extends TreeItem {
     super(getStepLabel(tour, stepNumber));
 
     const step = tour.steps[stepNumber];
+    const anchorResolution = anchorResolver.get(tour, stepNumber);
+    const anchorUnavailable =
+      !!step.anchor &&
+      !!anchorResolution &&
+      ["unresolved", "unsupported", "ambiguous"].includes(
+        anchorResolution.state
+      );
 
     let workspaceRoot, tours;
     if (store.activeTour && store.activeTour.tour.id === tour.id) {
@@ -80,10 +89,29 @@ export class CodeTourStepNode extends TreeItem {
     }
 
     this.command = {
-      command: `${EXTENSION_NAME}.startTour`,
-      title: "Start Tour",
+      command: anchorUnavailable
+        ? `${EXTENSION_NAME}.rebindTourStepAnchor`
+        : `${EXTENSION_NAME}.startTour`,
+      title: anchorUnavailable
+        ? l10n.t("Rebind Tour Step Anchor")
+        : l10n.t("Start Tour"),
       arguments: [tour, stepNumber, workspaceRoot, tours]
     };
+    if (anchorUnavailable) {
+      this.command.arguments = [this];
+      this.description =
+        step.anchor!.type === "symbol"
+          ? l10n.t("Symbol not found")
+          : l10n.t("Content not found");
+      this.tooltip =
+        step.anchor!.type === "symbol"
+          ? l10n.t(
+              "The stored symbol path could not be resolved. Select this step to rebind it."
+            )
+          : l10n.t(
+              "The stored content could not be found. Select this step to rebind it."
+            );
+    }
 
     let resourceUri;
     if (step.uri) {
@@ -107,7 +135,12 @@ export class CodeTourStepNode extends TreeItem {
       tour.id === store.activeTour?.tour.id &&
       store.activeTour.step === stepNumber;
 
-    if (isActive) {
+    if (anchorUnavailable) {
+      this.iconPath = new ThemeIcon(
+        "warning",
+        new ThemeColor("problemsWarningIcon.foreground")
+      );
+    } else if (isActive) {
       this.iconPath = new ThemeIcon("play-circle");
     } else if (progress.isComplete(tour, stepNumber)) {
       // @ts-ignore
@@ -146,6 +179,9 @@ export class CodeTourStepNode extends TreeItem {
 
     if (stepNumber < tour.steps.length - 1) {
       contextValues.push("hasNext");
+    }
+    if (anchorUnavailable) {
+      contextValues.push("unresolved");
     }
 
     this.contextValue = contextValues.join(".");

@@ -86,9 +86,17 @@
           "description": "Symbol name reported by the document symbol provider."
         },
         "kind": {
-          "type": "integer",
-          "minimum": 0,
-          "description": "Numeric VS Code SymbolKind value."
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0
+            },
+            {
+              "type": "string",
+              "minLength": 1
+            }
+          ],
+          "description": "VS Code SymbolKind value."
         }
       }
     },

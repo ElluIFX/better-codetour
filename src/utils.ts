@@ -205,9 +205,18 @@ async function updateMarkerTitlesForTour(tour: CodeTour) {
     return;
   }
 
-  tour.steps.forEach((_, index) => updateMarkerTitleForStep(tour, index));
+  await Promise.all(
+    tour.steps.map((_, index) =>
+      updateMarkerTitleForStep(tour, index).catch(error =>
+        console.warn(
+          `Unable to update marker title for ${tour.id} step ${index + 1}.`,
+          error
+        )
+      )
+    )
+  );
 }
 
 export async function updateMarkerTitles() {
-  store.tours.forEach(updateMarkerTitlesForTour);
+  await Promise.all(store.tours.map(updateMarkerTitlesForTour));
 }

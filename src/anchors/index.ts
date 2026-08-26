@@ -57,6 +57,14 @@ function rangeSize(document: vscode.TextDocument, range: vscode.Range) {
   return document.offsetAt(range.end) - document.offsetAt(range.start);
 }
 
+function comparableRangeSize(range: vscode.Range) {
+  return (
+    (range.end.line - range.start.line) * 1_000_000 +
+    range.end.character -
+    range.start.character
+  );
+}
+
 function flattenDocumentSymbols(
   symbols: readonly vscode.DocumentSymbol[],
   parentPath: readonly CodeTourSymbolPathSegment[] = []
@@ -94,21 +102,44 @@ async function getSymbolCandidates(
   }
 
   if (symbols.some(isSymbolInformation)) {
-    return symbols.map(symbol => {
-      if (isSymbolInformation(symbol)) {
-        return {
-          path: [{ name: symbol.name, kind: symbol.kind }],
-          range: symbol.location.range,
-          selectionRange: symbol.location.range
-        };
+    const information = symbols.filter(isSymbolInformation);
+    const getInformationPath = (
+      symbol: vscode.SymbolInformation,
+      visited: Set<vscode.SymbolInformation> = new Set()
+    ): CodeTourSymbolPathSegment[] => {
+      if (!symbol.containerName || visited.has(symbol)) {
+        return [{ name: symbol.name, kind: symbol.kind }];
       }
+      visited.add(symbol);
+      const parent = information
+        .filter(
+          candidate =>
+            candidate !== symbol &&
+            candidate.name === symbol.containerName &&
+            candidate.location.range.contains(symbol.location.range)
+        )
+        .sort(
+          (left, right) =>
+            comparableRangeSize(left.location.range) -
+            comparableRangeSize(right.location.range)
+        )[0];
+      return [
+        ...(parent ? getInformationPath(parent, visited) : []),
+        { name: symbol.name, kind: symbol.kind }
+      ];
+    };
 
-      return {
-        path: [{ name: symbol.name, kind: symbol.kind }],
-        range: symbol.range,
-        selectionRange: symbol.selectionRange
-      };
-    });
+    const candidates: SymbolCandidate[] = information.map(symbol => ({
+      path: getInformationPath(symbol),
+      range: symbol.location.range,
+      selectionRange: symbol.location.range
+    }));
+    symbols
+      .filter(symbol => !isSymbolInformation(symbol))
+      .forEach(symbol =>
+        candidates.push(...flattenDocumentSymbols([symbol as vscode.DocumentSymbol]))
+      );
+    return candidates;
   }
 
   return flattenDocumentSymbols(symbols as vscode.DocumentSymbol[]);

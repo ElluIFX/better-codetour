@@ -11,7 +11,7 @@ export interface CodeTourStepPosition {
 
 export interface CodeTourSymbolPathSegment {
   name: string;
-  kind: number;
+  kind: number | string;
 }
 
 export interface CodeTourSymbolAnchor {

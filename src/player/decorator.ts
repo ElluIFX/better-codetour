@@ -3,6 +3,7 @@
 
 import { reaction } from "mobx";
 import * as vscode from "vscode";
+import { anchorResolver } from "../anchors";
 import { FS_SCHEME_CONTENT, ICON_URL } from "../constants";
 import { CodeTourStepTuple, store } from "../store";
 import { getStepFileUri, getWorkspaceUri } from "../utils";
@@ -30,20 +31,38 @@ export async function getTourSteps(
   const tourSteps = await Promise.all(
     steps.map(async ([tour, step, stepNumber]) => {
       const workspaceRoot = getWorkspaceUri(tour);
-      const uri = await getStepFileUri(step, workspaceRoot);
+      const anchorResolution = step.anchor
+        ? anchorResolver.get(tour, stepNumber) ||
+          (await anchorResolver.resolveStep(tour, stepNumber))
+        : undefined;
+      const uri =
+        anchorResolution?.uri ||
+        (await getStepFileUri(step, workspaceRoot, tour.ref));
 
       if (uri.toString().localeCompare(editor.document.uri.toString()) === 0) {
-        let line;
-        if (step.line) {
+        let line = anchorResolution?.range?.start.line;
+        if (step.anchor && anchorResolution?.state !== "resolved") {
+          return;
+        } else if (line !== undefined) {
+          // The anchor resolver supplied the current line.
+        } else if (step.line) {
           line = step.line - 1;
+        } else if (step.selection) {
+          line = step.selection.end.line - 1;
         } else if (step.pattern) {
-          const match = contents.match(new RegExp(step.pattern, "m"));
-          if (match) {
-            line = editor.document.positionAt(match.index!).line;
+          try {
+            const match = contents.match(new RegExp(step.pattern, "m"));
+            if (match) {
+              line = editor.document.positionAt(match.index!).line;
+            }
+          } catch {
+            return;
           }
         }
 
-        return [tour, step, stepNumber, line];
+        if (line !== undefined) {
+          return [tour, step, stepNumber, line];
+        }
       }
     })
   );
@@ -104,12 +123,20 @@ function clearDecorations(editor: vscode.TextEditor) {
   editor.setDecorations(TOUR_DECORATOR, []);
 }
 
-let disposables: vscode.Disposable[] = [];
-export async function registerDecorators() {
-  reaction(
+export async function registerDecorators(context: vscode.ExtensionContext) {
+  const disposeReaction = reaction(
     () => [
       store.showMarkers,
-      store.tours.map(tour => [tour.title, tour.steps])
+      store.tours.map(tour => [
+        tour.title,
+        tour.steps.map(step => [
+          step.file,
+          step.line,
+          step.selection,
+          step.pattern,
+          step.anchor
+        ])
+      ])
     ],
     () => {
       const activeEditor = vscode.window.activeTextEditor;
@@ -117,26 +144,15 @@ export async function registerDecorators() {
       if (store.showMarkers) {
         if (hoverProviderDisposable === undefined) {
           hoverProviderDisposable = registerHoverProvider();
-          disposables.push(hoverProviderDisposable);
         }
-
-        disposables.push(
-          vscode.window.onDidChangeActiveTextEditor(editor => {
-            if (editor) {
-              updateDecorations(editor);
-            }
-          })
-        );
 
         if (activeEditor) {
-          updateDecorations(activeEditor);
+          void updateDecorations(activeEditor);
         }
-      } else if (activeEditor) {
-        clearDecorations(activeEditor);
-
-        disposables.forEach(disposable => disposable.dispose());
+      } else {
+        vscode.window.visibleTextEditors.forEach(clearDecorations);
+        hoverProviderDisposable?.dispose();
         hoverProviderDisposable = undefined;
-        disposables = [];
       }
     }
   );
@@ -149,5 +165,24 @@ export async function registerDecorators() {
     "setContext",
     "codetour:showingMarkers",
     store.showMarkers
+  );
+
+  context.subscriptions.push(
+    { dispose: disposeReaction },
+    vscode.window.onDidChangeActiveTextEditor(editor => {
+      if (editor && store.showMarkers) {
+        void updateDecorations(editor);
+      }
+    }),
+    anchorResolver.onDidChange(() => {
+      if (store.showMarkers && vscode.window.activeTextEditor) {
+        void updateDecorations(vscode.window.activeTextEditor);
+      }
+    }),
+    {
+      dispose() {
+        hoverProviderDisposable?.dispose();
+      }
+    }
   );
 }

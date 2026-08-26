@@ -83,7 +83,7 @@ export async function activate(context: vscode.ExtensionContext) {
   initializeTourPersistence(context);
   registerTourProvider(context);
   registerPlayerModule(context);
-  registerRecorderModule();
+  registerRecorderModule(context);
   registerLiveShareModule();
   anchorResolver.register(context);
 

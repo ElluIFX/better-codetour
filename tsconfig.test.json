@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "target": "ES2020",
+    "outDir": "out",
+    "types": ["node", "mocha", "vscode"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "src/notebook/**"]
+}

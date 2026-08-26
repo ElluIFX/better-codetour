@@ -12,6 +12,7 @@ import {
   CommentThread,
   CommentThreadCollapsibleState,
   ExtensionContext,
+  l10n,
   MarkdownString,
   Range,
   Selection,
@@ -22,6 +23,7 @@ import {
   workspace
 } from "vscode";
 import { SMALL_ICON_URL } from "../constants";
+import { anchorResolver } from "../anchors";
 import { CodeTour, store } from "../store";
 import { initializeStorage } from "../store/storage";
 import {
@@ -79,13 +81,19 @@ export function generatePreviewContent(content: string) {
         return `!${prefix}${fileUri.toString()}`;
       } else {
         const args = encodeURIComponent(JSON.stringify([fileUri]));
-        return `${prefix}command:vscode.open?${args} "Open ${filePath}"`;
+        return `${prefix}command:vscode.open?${args} "${l10n.t(
+          "Open {0}",
+          filePath
+        )}"`;
       }
     })
     .replace(TOUR_REFERENCE_PATTERN, (_, linkTitle, tourTitle, stepNumber) => {
       if (!tourTitle) {
         const title = linkTitle || `#${stepNumber}`;
-        return `[${title}](command:codetour.navigateToStep?${stepNumber} "Navigate to step #${stepNumber}")`;
+        return `[${title}](command:codetour.navigateToStep?${stepNumber} "${l10n.t(
+          "Navigate to step #{0}",
+          stepNumber
+        )}")`;
       }
 
       const tours = store.activeTour?.tours || store.tours;
@@ -105,8 +113,9 @@ export function generatePreviewContent(content: string) {
     })
     .replace(CODE_FENCE_PATTERN, (_, codeBlock) => {
       const params = encodeURIComponent(JSON.stringify([codeBlock]));
+      const insertCode = l10n.t("Insert Code");
       return `${_}
-↪ [Insert Code](command:codetour.insertCodeSnippet?${params} "Insert Code")`;
+↪ [${insertCode}](command:codetour.insertCodeSnippet?${params} "${insertCode}")`;
     });
 }
 
@@ -134,6 +143,8 @@ export class CodeTourComment implements Comment {
 }
 
 let controller: CommentController | null;
+let renderGeneration = 0;
+let lastUnresolvedNotice: string | undefined;
 
 export async function focusPlayer() {
   const currentThread = store.activeTour!.thread!;
@@ -155,7 +166,15 @@ export async function startPlayer() {
   controller.commentingRangeProvider = {
     provideCommentingRanges: (document: TextDocument) => {
       if (store.isRecording) {
-        return [new Range(0, 0, document.lineCount, 0)];
+        const fullDocument = document.validateRange(
+          new Range(0, 0, document.lineCount, 0)
+        );
+        const editor = window.visibleTextEditors.find(
+          candidate => candidate.document.uri.toString() === document.uri.toString()
+        );
+        return editor && !editor.selection.isEmpty
+          ? [editor.selection, fullDocument]
+          : [fullDocument];
       } else {
         return null;
       }
@@ -229,6 +248,7 @@ function getNextTour(): CodeTour | undefined {
 }
 
 async function renderCurrentStep() {
+  const generation = ++renderGeneration;
   if (store.activeTour!.thread) {
     store.activeTour!.thread.dispose();
   }
@@ -242,9 +262,59 @@ async function renderCurrentStep() {
   }
 
   const workspaceRoot = store.activeTour?.workspaceRoot;
-  const uri = await getStepFileUri(step, workspaceRoot, currentTour.ref);
+  const cachedAnchorResolution = step.anchor
+    ? anchorResolver.get(currentTour, currentStep)
+    : undefined;
+  const anchorResolution = step.anchor
+    ? cachedAnchorResolution ||
+      (await anchorResolver.resolveStep(currentTour, currentStep))
+    : undefined;
+  if (
+    generation !== renderGeneration ||
+    !store.activeTour ||
+    store.activeTour.tour.id !== currentTour.id ||
+    store.activeTour.step !== currentStep
+  ) {
+    return;
+  }
 
-  let line = step.line
+  if (step.anchor && anchorResolution?.state !== "resolved") {
+    store.activeTour.thread = null;
+    const noticeKey = `${currentTour.id}#${currentStep}#${anchorResolution?.state}`;
+    if (lastUnresolvedNotice !== noticeKey) {
+      lastUnresolvedNotice = noticeKey;
+      const rebind = l10n.t("Rebind");
+      const skip = l10n.t("Skip Step");
+      void window
+        .showWarningMessage(
+          step.anchor.type === "symbol"
+            ? l10n.t("The symbol for this CodeTour step could not be resolved.")
+            : l10n.t("The content for this CodeTour step could not be found."),
+          rebind,
+          skip
+        )
+        .then(response => {
+          if (response === rebind) {
+            void commands.executeCommand(
+              "codetour.rebindTourStepAnchor",
+              { tour: currentTour, stepNumber: currentStep }
+            );
+          } else if (response === skip) {
+            void commands.executeCommand("codetour.skipUnresolvedTourStep");
+          }
+        });
+    }
+    return;
+  }
+  lastUnresolvedNotice = undefined;
+
+  const uri =
+    anchorResolution?.uri ||
+    (await getStepFileUri(step, workspaceRoot, currentTour.ref));
+
+  let line = anchorResolution?.range
+    ? anchorResolution.range.start.line
+    : step.line
     ? step.line - 1
     : step.selection
     ? step.selection.end.line - 1
@@ -254,22 +324,50 @@ async function renderCurrentStep() {
     const stepPattern = step.pattern || getActiveStepMarker();
     if (stepPattern) {
       const document = await workspace.openTextDocument(uri);
-      const match = document.getText().match(new RegExp(stepPattern, "m"));
-      if (match) {
-        line = document.positionAt(match.index!).line;
+      try {
+        const match = document.getText().match(new RegExp(stepPattern, "m"));
+        if (match) {
+          line = document.positionAt(match.index!).line;
+        }
+      } catch (error) {
+        console.warn(`Invalid CodeTour step pattern: ${stepPattern}`, error);
       }
     }
   }
 
   if (line === undefined) {
-    // The step doesn't have a discoverable line number and so
-    // stick the step at the end of the file. Unfortunately, there
-    // isn't a way to say EOF, so 2000 is a temporary hack.
-    line = 2000;
+    try {
+      const document = await workspace.openTextDocument(uri);
+      line = Math.max(document.lineCount - 1, 0);
+    } catch {
+      line = 0;
+    }
   }
 
-  const range = new Range(line!, 0, line!, 0);
-  let label = `Step #${currentStep + 1} of ${currentTour!.steps.length}`;
+  if (!anchorResolution?.range) {
+    try {
+      const document = await workspace.openTextDocument(uri);
+      line = Math.min(Math.max(line, 0), Math.max(document.lineCount - 1, 0));
+    } catch {
+      line = Math.max(line, 0);
+    }
+  }
+
+  if (
+    generation !== renderGeneration ||
+    !store.activeTour ||
+    store.activeTour.tour.id !== currentTour.id ||
+    store.activeTour.step !== currentStep
+  ) {
+    return;
+  }
+
+  const range = anchorResolution?.range || new Range(line!, 0, line!, 0);
+  let label = l10n.t(
+    "Step #{0} of {1}",
+    currentStep + 1,
+    currentTour!.steps.length
+  );
 
   if (currentTour.title) {
     const title = getTourTitle(currentTour);
@@ -300,7 +398,11 @@ async function renderCurrentStep() {
         false
       );
       const suffix = stepLabel ? ` (${stepLabel})` : "";
-      content += `← [Previous${suffix}](command:codetour.previousTourStep "Navigate to previous step")`;
+      content += `← [${l10n.t(
+        "Previous"
+      )}${suffix}](command:codetour.previousTourStep "${l10n.t(
+        "Navigate to previous step"
+      )}")`;
     } else {
       const previousTour = getPreviousTour();
       if (previousTour) {
@@ -310,7 +412,11 @@ async function renderCurrentStep() {
         const argsContent = encodeURIComponent(
           JSON.stringify([previousTour.title])
         );
-        content += `← [Previous Tour (${tourTitle})](command:codetour.startTourByTitle?${argsContent} "Navigate to previous tour")`;
+        content += `← [${l10n.t(
+          "Previous Tour"
+        )} (${tourTitle})](command:codetour.startTourByTitle?${argsContent} "${l10n.t(
+          "Navigate to previous tour"
+        )}")`;
       }
     }
 
@@ -323,7 +429,11 @@ async function renderCurrentStep() {
         false
       );
       const suffix = stepLabel ? ` (${stepLabel})` : "";
-      content += `${prefix}[Next${suffix}](command:codetour.nextTourStep "Navigate to next step") →`;
+      content += `${prefix}[${l10n.t(
+        "Next"
+      )}${suffix}](command:codetour.nextTourStep "${l10n.t(
+        "Navigate to next step"
+      )}") →`;
     } else if (isFinalStep) {
       const nextTour = getNextTour();
       if (nextTour) {
@@ -331,9 +441,15 @@ async function renderCurrentStep() {
         const argsContent = encodeURIComponent(
           JSON.stringify([nextTour.title])
         );
-        content += `${prefix}[Next Tour (${tourTitle})](command:codetour.finishTour?${argsContent} "Start next tour")`;
+        content += `${prefix}[${l10n.t(
+          "Next Tour"
+        )} (${tourTitle})](command:codetour.finishTour?${argsContent} "${l10n.t(
+          "Start next tour"
+        )}")`;
       } else {
-        content += `${prefix}[Finish Tour](command:codetour.finishTour "Finish the tour")`;
+        content += `${prefix}[${l10n.t(
+          "Finish Tour"
+        )}](command:codetour.finishTour "${l10n.t("Finish the tour")}")`;
       }
     }
   }
@@ -357,13 +473,16 @@ async function renderCurrentStep() {
   if (hasNextStep) {
     contextValues.push("hasNext");
   }
+  if (step.anchor) {
+    contextValues.push("hasAnchor");
+  }
 
   store.activeTour!.thread.contextValue = contextValues.join(".");
   store.activeTour!.thread.collapsibleState =
     CommentThreadCollapsibleState.Expanded;
 
-  let selection;
-  if (step.selection) {
+  let selection = anchorResolution?.selection;
+  if (!selection && step.selection) {
     // Adjust the 1-based positions
     // to the 0-based positions that
     // VS Code's editor uses.
@@ -373,7 +492,7 @@ async function renderCurrentStep() {
       step.selection.end.line - 1,
       step.selection.end.character - 1
     );
-  } else {
+  } else if (!selection) {
     selection = new Selection(range.start, range.end);
   }
 
@@ -391,7 +510,10 @@ async function renderCurrentStep() {
       await commands.executeCommand(commandName);
     } catch {
       window.showErrorMessage(
-        `The current tour step is attempting to focus a view which isn't available: ${step.view}. Please check the tour and try again.`
+        l10n.t(
+          "The view for this tour step is unavailable: {0}. Check the tour and try again.",
+          step.view
+        )
       );
     }
   }
@@ -411,7 +533,7 @@ async function renderCurrentStep() {
         console.log("Executing command", name, JSON.stringify(args));
         await commands.executeCommand(name, ...args);
       } catch (e) {
-        window.showErrorMessage(`An error has occurred: ${e}`);
+        window.showErrorMessage(l10n.t("An error occurred: {0}", String(e)));
       }
     }
   }
@@ -435,18 +557,43 @@ async function showDocument(uri: Uri, range: Range, selection?: Selection) {
 
 export function registerPlayerModule(context: ExtensionContext) {
   registerPlayerCommands();
-  registerTreeProvider(context.extensionPath);
+  registerTreeProvider(context);
   registerFileSystemProvider();
   registerTextDocumentContentProvider();
-  registerStatusBar();
-  registerDecorators();
-  registerCodeStatusModule();
+  registerStatusBar(context);
+  registerDecorators(context);
+  void registerCodeStatusModule(context);
 
   initializeStorage(context);
 
+  context.subscriptions.push(
+    anchorResolver.onDidChange(() => {
+      if (!store.activeTour || store.activeTour.step < 0) {
+        return;
+      }
+      const resolution = anchorResolver.get(
+        store.activeTour.tour,
+        store.activeTour.step
+      );
+      if (resolution && resolution.state !== "pending") {
+        void renderCurrentStep();
+      }
+    }),
+    commands.registerCommand("codetour.skipUnresolvedTourStep", async () => {
+      if (!store.activeTour) {
+        return;
+      }
+      if (store.activeTour.step < store.activeTour.tour.steps.length - 1) {
+        store.activeTour.step++;
+      } else {
+        await commands.executeCommand("codetour.endTour");
+      }
+    })
+  );
+
   // Watch for changes to the active tour property,
   // and automatically re-render the current step in response.
-  reaction(
+  const disposeRenderReaction = reaction(
     () => [
       store.activeTour
         ? [
@@ -456,6 +603,9 @@ export function registerPlayerModule(context: ExtensionContext) {
               step.title,
               step.description,
               step.line,
+              step.pattern,
+              step.selection,
+              step.anchor,
               step.directory,
               step.view
             ])
@@ -464,8 +614,9 @@ export function registerPlayerModule(context: ExtensionContext) {
     ],
     () => {
       if (store.activeTour) {
-        renderCurrentStep();
+        void renderCurrentStep();
       }
     }
   );
+  context.subscriptions.push({ dispose: disposeRenderReaction });
 }

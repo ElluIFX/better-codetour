@@ -1,67 +1,62 @@
 // Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
-import { reaction } from "mobx";
-import { debounce } from "throttle-debounce";
 import * as vscode from "vscode";
-import { store } from "../store";
-import { saveTour } from "./commands";
+import { CodeTour, store } from "../store";
+import { saveTour } from "../store/persistence";
 
-const debouncedSaveTour = debounce(5000, saveTour);
-const changeWatcher = async (e: vscode.TextDocumentChangeEvent) => {
-  if (!store.activeEditorSteps) {
-    return;
+export function registerEditorWatcher(context: vscode.ExtensionContext) {
+  const saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  function scheduleSave(tour: CodeTour) {
+    const previous = saveTimers.get(tour.id);
+    if (previous) {
+      clearTimeout(previous);
+    }
+    saveTimers.set(
+      tour.id,
+      setTimeout(() => {
+        saveTimers.delete(tour.id);
+        void saveTour(tour);
+      }, 500)
+    );
   }
 
-  const impactedSteps = store.activeEditorSteps!.filter(
-    ([, step, , line]) =>
-      step.pattern &&
-      e.contentChanges.some(change => line === change.range.start.line)
-  );
+  const documentDisposable = vscode.workspace.onDidChangeTextDocument(event => {
+    if (!store.activeEditorSteps || event.contentChanges.length === 0) {
+      return;
+    }
 
-  if (impactedSteps.length === 0) {
-    return;
-  }
-
-  await Promise.all(
-    e.contentChanges.map(async () => {
-      for (let [tour, step, , line] of impactedSteps) {
-        const changedText = e.document.lineAt(line!).text;
-
-        // If the text is empty, then that means the user
-        // delete the step line, but we can't delete the
-        // steo, since we don't know if it was a delete
-        // or if theyy're doing a cut/paste of the line.
-        if (changedText === "") {
-          continue;
-        }
-
-        const newPattern = changedText
-          .replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-          .trim();
-
-        if (newPattern !== step.pattern) {
-          step.pattern = newPattern;
-          await debouncedSaveTour(tour);
-        }
+    const impactedSteps = store.activeEditorSteps.filter(
+      ([, step, , line]) =>
+        step.pattern &&
+        line !== undefined &&
+        event.contentChanges.some(change => change.range.start.line === line)
+    );
+    const changedTours = new Set<CodeTour>();
+    impactedSteps.forEach(([tour, step, , line]) => {
+      if (line === undefined || line >= event.document.lineCount) {
+        return;
       }
-    })
-  );
-};
+      const changedText = event.document.lineAt(line).text.trim();
+      if (!changedText) {
+        return;
+      }
+      const newPattern =
+        "^[^\\S\\n]*" +
+        changedText.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const matches = event.document.getText().match(new RegExp(newPattern, "gm"));
+      if (matches?.length === 1 && newPattern !== step.pattern) {
+        step.pattern = newPattern;
+        changedTours.add(tour);
+      }
+    });
+    changedTours.forEach(scheduleSave);
+  });
 
-let disposable: vscode.Disposable;
-function initializeWatcher() {
-  if (disposable) {
-    disposable.dispose();
-  }
-
-  if (store.tours.length > 0) {
-    disposable = vscode.workspace.onDidChangeTextDocument(changeWatcher);
-  }
-}
-
-export async function registerEditorWatcher() {
-  reaction(() => store.tours.length, initializeWatcher);
-
-  initializeWatcher();
+  context.subscriptions.push(documentDisposable, {
+    dispose() {
+      saveTimers.forEach(timer => clearTimeout(timer));
+    }
+  });
 }

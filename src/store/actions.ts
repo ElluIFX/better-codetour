@@ -4,7 +4,9 @@
 import {
   commands,
   EventEmitter,
+  l10n,
   Memento,
+  RelativePattern,
   Uri,
   window,
   workspace
@@ -54,7 +56,8 @@ export function startCodeTour(
     workspaceRoot = getWorkspaceUri(tour);
   }
 
-  const step = stepNumber ? stepNumber : tour.steps.length ? 0 : -1;
+  const step =
+    stepNumber !== undefined ? stepNumber : tour.steps.length ? 0 : -1;
   store.activeTour = {
     tour,
     step,
@@ -93,11 +96,11 @@ export async function selectTour(
   }
 
   const response = await window.showQuickPick(items, {
-    placeHolder: "Select the tour to start..."
+    placeHolder: l10n.t("Select the tour to start...")
   });
 
   if (response) {
-    startCodeTour(response.tour, 0, workspaceRoot, false, true, tours);
+    startCodeTour(response.tour, step, workspaceRoot, false, true, tours);
     return true;
   }
 
@@ -105,6 +108,9 @@ export async function selectTour(
 }
 
 export async function endCurrentCodeTour(fireEvent: boolean = true) {
+  if (!store.activeTour) {
+    return;
+  }
   if (fireEvent) {
     _onDidEndTour.fire(store.activeTour!.tour);
   }
@@ -132,12 +138,21 @@ export async function endCurrentCodeTour(fireEvent: boolean = true) {
 }
 
 export function moveCurrentCodeTourBackward() {
-  --store.activeTour!.step;
+  if (!store.activeTour || store.activeTour.step <= 0) {
+    return;
+  }
+  --store.activeTour.step;
 
-  _onDidStartTour.fire([store.activeTour!.tour, store.activeTour!.step]);
+  _onDidStartTour.fire([store.activeTour.tour, store.activeTour.step]);
 }
 
 export async function moveCurrentCodeTourForward() {
+  if (
+    !store.activeTour ||
+    store.activeTour.step >= store.activeTour.tour.steps.length - 1
+  ) {
+    return;
+  }
   await progress.update();
 
   store.activeTour!.step++;
@@ -146,7 +161,11 @@ export async function moveCurrentCodeTourForward() {
 }
 
 async function isCodeSwingWorkspace(uri: Uri) {
-  const files = await workspace.findFiles("codeswing.json");
+  const files = await workspace.findFiles(
+    new RelativePattern(uri, "codeswing.json"),
+    undefined,
+    1
+  );
   return files && files.length > 0;
 }
 
@@ -170,14 +189,16 @@ export async function promptForTour(
     workspace
       .getConfiguration(EXTENSION_NAME)
       .get("promptForWorkspaceTours", true) &&
-    !isCodeSwingWorkspace(workspaceRoot)
+    !(await isCodeSwingWorkspace(workspaceRoot))
   ) {
     globalState.update(key, true);
 
     if (
       await window.showInformationMessage(
-        "This workspace has guided tours you can take to get familiar with the codebase.",
-        "Start CodeTour"
+        l10n.t(
+          "This workspace contains guided tours that introduce the codebase."
+        ),
+        l10n.t("Start CodeTour")
       )
     ) {
       startDefaultTour(workspaceRoot, tours);

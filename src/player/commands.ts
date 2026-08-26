@@ -3,9 +3,10 @@
 
 import { when } from "mobx";
 import * as vscode from "vscode";
+import { anchorResolver } from "../anchors";
 import { EXTENSION_NAME } from "../constants";
 import { focusPlayer } from "../player";
-import { saveTour } from "../recorder/commands";
+import { saveTour } from "../store/persistence";
 import { CodeTour, store } from "../store";
 import {
   endCurrentCodeTour,
@@ -112,30 +113,42 @@ export function registerPlayerCommands() {
       const codeSnippet = decodeURIComponent(codeBlock);
 
       const step = store.activeTour!.tour.steps[store.activeTour!.step];
-      if (step.selection) {
+      const anchorResolution = step.anchor
+        ? await anchorResolver.resolveStep(
+            store.activeTour!.tour,
+            store.activeTour!.step
+          )
+        : undefined;
+      if (step.anchor && anchorResolution?.state !== "resolved") {
+        return vscode.window.showWarningMessage(
+          vscode.l10n.t("Resolve or rebind this tour step before inserting code.")
+        );
+      }
+
+      if (anchorResolution?.selection || step.selection) {
         await vscode.window.activeTextEditor?.edit(e => {
-          const selection = new vscode.Selection(
-            step.selection!.start.line - 1,
-            step.selection!.start.character - 1,
-            step.selection!.end.line - 1,
-            step.selection!.end.character - 1
-          );
+          const selection =
+            anchorResolution?.selection ||
+            new vscode.Selection(
+              step.selection!.start.line - 1,
+              step.selection!.start.character - 1,
+              step.selection!.end.line - 1,
+              step.selection!.end.character - 1
+            );
           e.replace(selection, codeSnippet);
         });
       } else {
-        const position = new vscode.Position(step.line! - 1, 0);
+        const position = anchorResolution?.range?.end ||
+          new vscode.Position(Math.max((step.line || 1) - 1, 0), 0);
         await vscode.window.activeTextEditor?.edit(e =>
           e.insert(position, codeSnippet)
         );
       }
 
       const lineAdjustment = codeSnippet.split("\n").length - 1;
-      if (lineAdjustment > 0) {
-        store.activeTour!.tour.steps[
-          store.activeTour!.step
-        ].line! += lineAdjustment;
-
-        saveTour(store.activeTour!.tour);
+      if (lineAdjustment > 0 && step.line !== undefined) {
+        step.line += lineAdjustment;
+        await saveTour(store.activeTour!.tour);
       }
 
       await vscode.commands.executeCommand("editor.action.formatDocument");
@@ -162,7 +175,7 @@ export function registerPlayerCommands() {
         );
       }
 
-      selectTour(store.tours, workspaceRoot);
+      await selectTour(store.tours, workspaceRoot);
     }
   );
 
@@ -196,11 +209,11 @@ export function registerPlayerCommands() {
     async () => {
       const uri = await vscode.window.showOpenDialog({
         filters: {
-          Tours: ["tour"]
+          [vscode.l10n.t("Tours")]: ["tour"]
         },
         canSelectFolders: false,
         canSelectMany: false,
-        openLabel: "Open Tour"
+        openLabel: vscode.l10n.t("Open Tour")
       });
 
       if (!uri) {
@@ -216,7 +229,9 @@ export function registerPlayerCommands() {
         startCodeTour(tour);
       } catch {
         vscode.window.showErrorMessage(
-          "This file doesn't appear to be a valid tour. Please inspect its contents and try again."
+          vscode.l10n.t(
+            "This file is not a valid tour. Inspect its contents and try again."
+          )
         );
       }
     }
@@ -224,7 +239,7 @@ export function registerPlayerCommands() {
 
   vscode.commands.registerCommand(`${EXTENSION_NAME}.openTourUrl`, async () => {
     const url = await vscode.window.showInputBox({
-      prompt: "Specify the URL of the tour file to open",
+      prompt: vscode.l10n.t("Specify the URL of the tour file to open"),
       value: await vscode.env.clipboard.readText()
     });
 
@@ -240,7 +255,9 @@ export function registerPlayerCommands() {
       startCodeTour(tour);
     } catch {
       vscode.window.showErrorMessage(
-        "This file doesn't appear to be a valid tour. Please inspect its contents and try again."
+        vscode.l10n.t(
+          "This file is not a valid tour. Inspect its contents and try again."
+        )
       );
     }
   });
@@ -250,9 +267,9 @@ export function registerPlayerCommands() {
     async (node: CodeTourNode) => {
       const uri = await vscode.window.showSaveDialog({
         filters: {
-          Tours: ["tour"]
+          [vscode.l10n.t("Tours")]: ["tour"]
         },
-        saveLabel: "Export Tour"
+        saveLabel: vscode.l10n.t("Export Tour")
       });
 
       if (!uri) {
@@ -261,18 +278,18 @@ export function registerPlayerCommands() {
 
       const contents = await exportTour(node.tour);
       const bytes = new TextEncoder().encode(contents);
-      vscode.workspace.fs.writeFile(uri, bytes);
+      await vscode.workspace.fs.writeFile(uri, bytes);
     }
   );
 
-  function setShowMarkers(showMarkers: boolean) {
+  async function setShowMarkers(showMarkers: boolean) {
     store.showMarkers = showMarkers;
 
-    vscode.workspace
+    await vscode.workspace
       .getConfiguration("codetour")
       .update("showMarkers", showMarkers, vscode.ConfigurationTarget.Global);
 
-    vscode.commands.executeCommand(
+    await vscode.commands.executeCommand(
       "setContext",
       "codetour:showingMarkers",
       showMarkers
@@ -280,11 +297,11 @@ export function registerPlayerCommands() {
   }
 
   vscode.commands.registerCommand(`${EXTENSION_NAME}.hideMarkers`, () =>
-    setShowMarkers(false)
+    void setShowMarkers(false)
   );
 
   vscode.commands.registerCommand(`${EXTENSION_NAME}.showMarkers`, () =>
-    setShowMarkers(true)
+    void setShowMarkers(true)
   );
 
   vscode.commands.registerCommand(`${EXTENSION_NAME}.resetProgress`, () =>
