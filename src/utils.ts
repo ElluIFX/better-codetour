@@ -23,8 +23,6 @@ export function getStepLabel(
     label = step.title;
   } else if (HEADING_PATTERN.test(step.description.trim())) {
     label = step.description.trim().match(HEADING_PATTERN)![1];
-  } else if (step.markerTitle) {
-    label = step.markerTitle;
   } else if (defaultToFileName) {
     label = step.uri
       ? step.uri!
@@ -66,14 +64,35 @@ export function getFileUri(file: string, workspaceRoot?: Uri) {
   //return appendUriPath(workspaceRoot, file);
 }
 
+export function getEmbeddedStepUri(
+  tour: CodeTour,
+  stepNumber: number,
+  file?: string
+) {
+  return Uri.from({
+    scheme: FS_SCHEME,
+    authority: "embedded",
+    path: `/${file || "CodeTour"}`,
+    query: new URLSearchParams({
+      tour: tour.id,
+      step: stepNumber.toString()
+    }).toString()
+  });
+}
+
 export async function getStepFileUri(
   step: CodeTourStep,
   workspaceRoot?: Uri,
-  ref?: string
+  ref?: string,
+  tour?: CodeTour,
+  stepNumber?: number
 ): Promise<Uri> {
   let uri;
-  if (step.contents) {
-    uri = Uri.parse(`${FS_SCHEME}://current/${step.file}`);
+  if (step.contents !== undefined) {
+    if (!tour || stepNumber === undefined) {
+      throw new Error("Embedded CodeTour steps require tour identity.");
+    }
+    uri = getEmbeddedStepUri(tour, stepNumber, step.file);
   } else if (step.uri || step.file) {
     uri = step.uri
       ? Uri.parse(step.uri)
@@ -113,9 +132,9 @@ export function getWorkspacePath(tour: CodeTour) {
 }
 
 export function getWorkspaceUri(tour: CodeTour): Uri | undefined {
-  const tourUri = Uri.parse(tour.id);
+  const tourUri = tour.id ? Uri.parse(tour.id) : undefined;
   return (
-    workspace.getWorkspaceFolder(tourUri)?.uri ||
+    (tourUri && workspace.getWorkspaceFolder(tourUri)?.uri) ||
     (workspace.workspaceFolders && workspace.workspaceFolders[0].uri)
   );
 }
@@ -129,94 +148,4 @@ function getTourNumber(tour: CodeTour): number | undefined {
 
 export function getActiveTourNumber(): number | undefined {
   return getTourNumber(store.activeTour!.tour);
-}
-
-function getStepMarkerPrefix(tour: CodeTour): string | undefined {
-  if (tour.stepMarker) {
-    return tour.stepMarker;
-  } else {
-    const tourNumber = getTourNumber(tour);
-    if (tourNumber) {
-      return `CT${tourNumber}`;
-    }
-  }
-}
-
-function getActiveStepMarkerPrefix(): string | undefined {
-  return getStepMarkerPrefix(store.activeTour!.tour);
-}
-
-export function getActiveStepMarker(): string | undefined {
-  if (!isMarkerStep(store.activeTour!.tour, store.activeTour!.step)) {
-    return;
-  }
-
-  const prefix = getActiveStepMarkerPrefix();
-  const suffix = `.${store.activeTour!.step + 1}`;
-  return `${prefix}${suffix}`;
-}
-
-export async function getStepMarkerForLine(uri: Uri, lineNumber: number) {
-  const document = await workspace.openTextDocument(uri);
-  const line = document.lineAt(lineNumber).text;
-
-  const stepMarkerPrefix = getActiveStepMarkerPrefix();
-  const match = line.match(new RegExp(`${stepMarkerPrefix}.(\\d+)`));
-  if (match) {
-    return Number(match[1]);
-  }
-}
-
-function isMarkerTour(tour: CodeTour): boolean {
-  return !!getStepMarkerPrefix(tour);
-}
-
-function isMarkerStep(tour: CodeTour, stepNumber: number) {
-  const step = tour.steps[stepNumber];
-  return getStepMarkerPrefix(tour) && step.file && !step.line;
-}
-
-async function updateMarkerTitleForStep(tour: CodeTour, stepNumber: number) {
-  if (!isMarkerStep(tour, stepNumber)) {
-    return;
-  }
-
-  const uri = await getStepFileUri(
-    tour.steps[stepNumber],
-    getWorkspaceUri(tour),
-    tour.ref
-  );
-
-  const document = await workspace.openTextDocument(uri);
-  const stepMarkerPrefix = getStepMarkerPrefix(tour);
-
-  const markerPattern = new RegExp(
-    `${stepMarkerPrefix}\\.${stepNumber + 1}\\s*[-:]\\s*(.*)`
-  );
-
-  const match = document.getText().match(markerPattern);
-  if (match) {
-    tour.steps[stepNumber].markerTitle = match[1];
-  }
-}
-
-async function updateMarkerTitlesForTour(tour: CodeTour) {
-  if (!isMarkerTour(tour)) {
-    return;
-  }
-
-  await Promise.all(
-    tour.steps.map((_, index) =>
-      updateMarkerTitleForStep(tour, index).catch(error =>
-        console.warn(
-          `Unable to update marker title for ${tour.id} step ${index + 1}.`,
-          error
-        )
-      )
-    )
-  );
-}
-
-export async function updateMarkerTitles() {
-  await Promise.all(store.tours.map(updateMarkerTitlesForTour));
 }

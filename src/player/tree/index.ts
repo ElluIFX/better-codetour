@@ -23,8 +23,8 @@ class CodeTourTreeProvider implements TreeDataProvider<TreeItem>, Disposable {
   private _disposables: Disposable[] = [];
 
   private _onDidChangeTreeData = new EventEmitter<TreeItem | undefined>();
-  public readonly onDidChangeTreeData: Event<TreeItem | undefined> = this
-    ._onDidChangeTreeData.event;
+  public readonly onDidChangeTreeData: Event<TreeItem | undefined> =
+    this._onDidChangeTreeData.event;
 
   constructor(private extensionPath: string) {
     const disposeReaction = reaction(
@@ -39,8 +39,6 @@ class CodeTourTreeProvider implements TreeDataProvider<TreeItem>, Disposable {
             step.description,
             step.icon,
             step.file,
-            step.line,
-            step.pattern,
             step.anchor
           ])
         ]),
@@ -56,8 +54,8 @@ class CodeTourTreeProvider implements TreeDataProvider<TreeItem>, Disposable {
               store.activeTour.tour.description,
               store.activeTour.tour.steps.map(step => [
                 step.title,
-                step.markerTitle,
-                step.description
+                step.description,
+                step.anchor
               ])
             ]
           : null
@@ -132,7 +130,8 @@ class CodeTourTreeProvider implements TreeDataProvider<TreeItem>, Disposable {
   async resolveTreeItem(element: TreeItem): Promise<TreeItem> {
     if (element instanceof CodeTourStepNode) {
       const content = generatePreviewContent(
-        element.tour.steps[element.stepNumber].description
+        element.tour.steps[element.stepNumber].description,
+        element.tour
       );
 
       const tooltip = new MarkdownString(content);
@@ -213,10 +212,7 @@ export function registerTreeProvider(context: ExtensionContext) {
       }
     }
   );
-  context.subscriptions.push(
-    treeDataProvider,
-    treeView,
-    visibilityDisposable,
-    { dispose: disposeRevealReaction }
-  );
+  context.subscriptions.push(treeDataProvider, treeView, visibilityDisposable, {
+    dispose: disposeRevealReaction
+  });
 }

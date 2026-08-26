@@ -3,9 +3,6 @@
   "extension.description": "Record and play guided tours of codebases directly in VS Code.",
   "configuration.title": "CodeTour",
   "configuration.promptForWorkspaceTours": "Show a notification when a workspace containing tours is opened for the first time.",
-  "configuration.recordMode": "Controls how a gutter tour step is anchored when no text is selected.",
-  "configuration.recordMode.lineNumber": "Anchor the step to a line number.",
-  "configuration.recordMode.pattern": "Anchor the step to the current line contents using the legacy regular expression format.",
   "configuration.showMarkers": "Show tour markers in the editor gutter.",
   "configuration.customTourDirectory": "Custom workspace-relative directory used to discover tours.",
   "configuration.autoUpdateAnchors": "Automatically update symbol and content anchors when monitored source edits can be tracked safely.",
@@ -34,6 +31,7 @@
   "command.next": "Next",
   "command.openTourFile": "Open Tour File...",
   "command.openTourUrl": "Open Tour URL...",
+  "command.openCodeTourPanel": "Open CodeTour Panel",
   "command.previewTour": "Preview Tour",
   "command.previous": "Previous",
   "command.recordTour": "Record Tour",
@@ -43,5 +41,6 @@
   "command.startTour": "Start Tour",
   "command.unmakePrimary": "Unmake Primary",
   "command.viewNotebook": "View Notebook",
+  "view.title": "CodeTour",
   "view.welcome": "Record a guided walkthrough for the current workspace ([Learn More](https://github.com/ElluIFX/better-codetour#recording-tours)).\n\n[Record Tour](command:codetour.recordTour)\n\nYou can also open a tour shared by someone else.\n\n[Open Tour File](command:codetour.openTourFile)\n\n[Open Tour URL](command:codetour.openTourUrl)"
 }

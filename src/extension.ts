@@ -6,6 +6,7 @@ import { anchorResolver } from "./anchors";
 import { initializeApi } from "./api";
 import { initializeGitApi } from "./git";
 import { registerLiveShareModule } from "./liveShare";
+import { registerNotebookProvider } from "./notebook";
 import { registerPlayerModule } from "./player";
 import { registerRecorderModule } from "./recorder";
 import { store } from "./store";
@@ -84,7 +85,10 @@ export async function activate(context: vscode.ExtensionContext) {
   registerTourProvider(context);
   registerPlayerModule(context);
   registerRecorderModule(context);
-  registerLiveShareModule();
+  registerNotebookProvider(context);
+  void registerLiveShareModule(context).catch(error =>
+    console.warn("Unable to register CodeTour Live Share.", error)
+  );
   anchorResolver.register(context);
 
   const uriHandler = new URIHandler();

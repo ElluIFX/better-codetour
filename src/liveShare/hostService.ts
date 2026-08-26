@@ -25,5 +25,5 @@ export async function initializeService(vslsApi: vsls.LiveShare) {
     };
   });
 
-  initializeBaseService(vslsApi, service);
+  return initializeBaseService(vslsApi, service);
 }

@@ -2,6 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Schema for CodeTour tour files",
   "type": "object",
+  "additionalProperties": false,
   "required": ["title", "steps"],
   "properties": {
     "$schema": {
@@ -32,10 +33,6 @@
         "$ref": "#/definitions/step"
       }
     },
-    "stepMarker": {
-      "type": "string",
-      "description": "Specifies the marker that associates source lines with tour steps."
-    },
     "nextTour": {
       "type": "string",
       "description": "Specifies the title of the tour that follows this tour."
@@ -46,35 +43,6 @@
     }
   },
   "definitions": {
-    "position": {
-      "type": "object",
-      "required": ["line", "character"],
-      "properties": {
-        "line": {
-          "type": "number",
-          "minimum": 1,
-          "description": "One-based line number."
-        },
-        "character": {
-          "type": "number",
-          "minimum": 1,
-          "description": "One-based column number."
-        }
-      }
-    },
-    "selection": {
-      "type": "object",
-      "required": ["start", "end"],
-      "description": "Legacy text selection associated with a step.",
-      "properties": {
-        "start": {
-          "$ref": "#/definitions/position"
-        },
-        "end": {
-          "$ref": "#/definitions/position"
-        }
-      }
-    },
     "symbolPathSegment": {
       "type": "object",
       "required": ["name", "kind"],
@@ -86,22 +54,29 @@
           "description": "Symbol name reported by the document symbol provider."
         },
         "kind": {
-          "oneOf": [
-            {
-              "type": "integer",
-              "minimum": 0
-            },
-            {
-              "type": "string",
-              "minLength": 1
-            }
-          ],
+          "type": "integer",
+          "minimum": 0,
           "description": "VS Code SymbolKind value."
         }
       }
     },
     "anchor": {
       "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "number"],
+          "additionalProperties": false,
+          "properties": {
+            "type": {
+              "const": "line"
+            },
+            "number": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "One-based source line number."
+            }
+          }
+        },
         {
           "type": "object",
           "required": ["type", "path"],
@@ -139,6 +114,67 @@
     "step": {
       "type": "object",
       "required": ["description"],
+      "additionalProperties": false,
+      "oneOf": [
+        {
+          "required": ["file", "anchor"],
+          "not": {
+            "anyOf": [
+              { "required": ["directory"] },
+              { "required": ["uri"] },
+              { "required": ["view"] }
+            ]
+          }
+        },
+        {
+          "required": ["directory"],
+          "not": {
+            "anyOf": [
+              { "required": ["file"] },
+              { "required": ["anchor"] },
+              { "required": ["contents"] },
+              { "required": ["uri"] },
+              { "required": ["view"] }
+            ]
+          }
+        },
+        {
+          "required": ["uri"],
+          "not": {
+            "anyOf": [
+              { "required": ["file"] },
+              { "required": ["anchor"] },
+              { "required": ["contents"] },
+              { "required": ["directory"] },
+              { "required": ["view"] }
+            ]
+          }
+        },
+        {
+          "required": ["view"],
+          "not": {
+            "anyOf": [
+              { "required": ["file"] },
+              { "required": ["anchor"] },
+              { "required": ["contents"] },
+              { "required": ["directory"] },
+              { "required": ["uri"] }
+            ]
+          }
+        },
+        {
+          "not": {
+            "anyOf": [
+              { "required": ["file"] },
+              { "required": ["anchor"] },
+              { "required": ["contents"] },
+              { "required": ["directory"] },
+              { "required": ["uri"] },
+              { "required": ["view"] }
+            ]
+          }
+        }
+      ],
       "properties": {
         "file": {
           "type": "string",
@@ -160,18 +196,6 @@
         "uri": {
           "type": "string",
           "description": "Absolute URI associated with the step."
-        },
-        "line": {
-          "type": "number",
-          "minimum": 1,
-          "description": "Legacy one-based line number associated with the step."
-        },
-        "pattern": {
-          "type": "string",
-          "description": "Legacy regular expression used when line is absent."
-        },
-        "selection": {
-          "$ref": "#/definitions/selection"
         },
         "anchor": {
           "$ref": "#/definitions/anchor"

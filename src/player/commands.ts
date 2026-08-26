@@ -17,11 +17,19 @@ import {
   startCodeTour
 } from "../store/actions";
 import { progress } from "../store/storage";
-import { readUriContents } from "../utils";
+import { getStepFileUri, readUriContents } from "../utils";
 import { CodeTourNode } from "./tree/nodes";
 
 let terminal: vscode.Terminal | null;
 export function registerPlayerCommands() {
+  vscode.commands.registerCommand(
+    `${EXTENSION_NAME}.openCodeTourPanel`,
+    async () => {
+      await vscode.commands.executeCommand("workbench.view.explorer");
+      await vscode.commands.executeCommand(`${EXTENSION_NAME}.tours.focus`);
+    }
+  );
+
   // This is a "private" command that's used exclusively
   // by the hover description for tour markers.
   vscode.commands.registerCommand(
@@ -121,33 +129,53 @@ export function registerPlayerCommands() {
         : undefined;
       if (step.anchor && anchorResolution?.state !== "resolved") {
         return vscode.window.showWarningMessage(
-          vscode.l10n.t("Resolve or rebind this tour step before inserting code.")
+          vscode.l10n.t(
+            "Resolve or rebind this tour step before inserting code."
+          )
         );
       }
 
-      if (anchorResolution?.selection || step.selection) {
-        await vscode.window.activeTextEditor?.edit(e => {
-          const selection =
-            anchorResolution?.selection ||
-            new vscode.Selection(
-              step.selection!.start.line - 1,
-              step.selection!.start.character - 1,
-              step.selection!.end.line - 1,
-              step.selection!.end.character - 1
-            );
-          e.replace(selection, codeSnippet);
+      const activeTour = store.activeTour!;
+      const targetUri =
+        anchorResolution?.uri ||
+        (step.file || step.uri || step.contents !== undefined
+          ? await getStepFileUri(
+              step,
+              activeTour.workspaceRoot,
+              activeTour.tour.ref,
+              activeTour.tour,
+              activeTour.step
+            )
+          : undefined);
+      const editor = targetUri
+        ? await vscode.window.showTextDocument(targetUri, { preview: false })
+        : vscode.window.activeTextEditor;
+      if (!editor) {
+        return vscode.window.showWarningMessage(
+          vscode.l10n.t("Open a text editor before inserting code.")
+        );
+      }
+
+      let edited: boolean;
+      if (step.anchor?.type !== "line" && anchorResolution?.selection) {
+        edited = await editor.edit(e => {
+          e.replace(anchorResolution.selection!, codeSnippet);
         });
       } else {
-        const position = anchorResolution?.range?.end ||
-          new vscode.Position(Math.max((step.line || 1) - 1, 0), 0);
-        await vscode.window.activeTextEditor?.edit(e =>
-          e.insert(position, codeSnippet)
+        const position =
+          anchorResolution?.range?.start || new vscode.Position(0, 0);
+        edited = await editor.edit(e => e.insert(position, codeSnippet));
+      }
+
+      if (!edited) {
+        return vscode.window.showErrorMessage(
+          vscode.l10n.t("The code snippet could not be inserted.")
         );
       }
 
       const lineAdjustment = codeSnippet.split("\n").length - 1;
-      if (lineAdjustment > 0 && step.line !== undefined) {
-        step.line += lineAdjustment;
+      if (lineAdjustment > 0 && step.anchor?.type === "line") {
+        step.anchor.number += lineAdjustment;
         await saveTour(store.activeTour!.tour);
       }
 
@@ -183,7 +211,11 @@ export function registerPlayerCommands() {
     `${EXTENSION_NAME}.viewNotebook`,
     async (node: CodeTourNode) => {
       const tourUri = vscode.Uri.parse(node.tour.id);
-      vscode.window.showTextDocument(tourUri);
+      await vscode.commands.executeCommand(
+        "vscode.openWith",
+        tourUri,
+        EXTENSION_NAME
+      );
     }
   );
 
@@ -276,7 +308,7 @@ export function registerPlayerCommands() {
         return;
       }
 
-      const contents = await exportTour(node.tour);
+      const contents = await exportTour(node.tour, uri);
       const bytes = new TextEncoder().encode(contents);
       await vscode.workspace.fs.writeFile(uri, bytes);
     }
@@ -296,12 +328,14 @@ export function registerPlayerCommands() {
     );
   }
 
-  vscode.commands.registerCommand(`${EXTENSION_NAME}.hideMarkers`, () =>
-    void setShowMarkers(false)
+  vscode.commands.registerCommand(
+    `${EXTENSION_NAME}.hideMarkers`,
+    () => void setShowMarkers(false)
   );
 
-  vscode.commands.registerCommand(`${EXTENSION_NAME}.showMarkers`, () =>
-    void setShowMarkers(true)
+  vscode.commands.registerCommand(
+    `${EXTENSION_NAME}.showMarkers`,
+    () => void setShowMarkers(true)
   );
 
   vscode.commands.registerCommand(`${EXTENSION_NAME}.resetProgress`, () =>

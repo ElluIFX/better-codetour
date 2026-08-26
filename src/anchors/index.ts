@@ -10,7 +10,7 @@ import {
   store
 } from "../store";
 import { saveTour } from "../store/persistence";
-import { getStepFileUri, getWorkspaceUri } from "../utils";
+import { getFileUri, getStepFileUri, getWorkspaceUri } from "../utils";
 
 interface SymbolCandidate {
   path: CodeTourSymbolPathSegment[];
@@ -32,8 +32,42 @@ function getAnchorKey(tour: CodeTour, stepNumber: number) {
   return `${tour.id}#${stepNumber}`;
 }
 
+function getKnownTours() {
+  const tours = [
+    ...(store.activeTour ? [store.activeTour.tour] : []),
+    ...(store.activeTour?.tours || []),
+    ...store.tours
+  ];
+  return tours.filter(
+    (tour, index) =>
+      tours.findIndex(candidate => candidate.id === tour.id) === index
+  );
+}
+
+function getTourWorkspaceRoot(tour: CodeTour) {
+  if (
+    store.activeTour &&
+    (store.activeTour.tour.id === tour.id ||
+      store.activeTour.tours?.some(candidate => candidate.id === tour.id))
+  ) {
+    return store.activeTour.workspaceRoot || getWorkspaceUri(tour);
+  }
+  return getWorkspaceUri(tour);
+}
+
+function comparableUri(uri: vscode.Uri) {
+  const value = uri.toString();
+  return process.platform === "win32" && uri.scheme === "file"
+    ? value.toLocaleLowerCase()
+    : value;
+}
+
 function normalizeContent(text: string) {
   return text.replace(/\r\n/g, "\n");
+}
+
+function getFirstLineRange(document: vscode.TextDocument, range: vscode.Range) {
+  return document.lineAt(range.start.line).range;
 }
 
 function pathsEqual(
@@ -70,10 +104,7 @@ function flattenDocumentSymbols(
   parentPath: readonly CodeTourSymbolPathSegment[] = []
 ): SymbolCandidate[] {
   return symbols.flatMap(symbol => {
-    const path = [
-      ...parentPath,
-      { name: symbol.name, kind: symbol.kind }
-    ];
+    const path = [...parentPath, { name: symbol.name, kind: symbol.kind }];
     return [
       {
         path,
@@ -137,7 +168,9 @@ async function getSymbolCandidates(
     symbols
       .filter(symbol => !isSymbolInformation(symbol))
       .forEach(symbol =>
-        candidates.push(...flattenDocumentSymbols([symbol as vscode.DocumentSymbol]))
+        candidates.push(
+          ...flattenDocumentSymbols([symbol as vscode.DocumentSymbol])
+        )
       );
     return candidates;
   }
@@ -163,9 +196,7 @@ function transformOffset(
       continue;
     }
 
-    return (
-      changeStart + accumulatedDelta + (endBias ? change.text.length : 0)
-    );
+    return changeStart + accumulatedDelta + (endBias ? change.text.length : 0);
   }
 
   return offset + accumulatedDelta;
@@ -175,7 +206,10 @@ class TourAnchorResolver implements vscode.Disposable {
   private readonly resolutions = new Map<string, AnchorResolution>();
   private readonly generations = new Map<string, number>();
   private readonly sourceWatchers = new Map<string, vscode.FileSystemWatcher>();
-  private readonly saveTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly saveTimers = new Map<
+    string,
+    ReturnType<typeof setTimeout>
+  >();
   private readonly resolveTimers = new Map<
     string,
     ReturnType<typeof setTimeout>
@@ -189,8 +223,9 @@ class TourAnchorResolver implements vscode.Disposable {
   register(context: vscode.ExtensionContext) {
     const disposeReaction = reaction(
       () =>
-        store.tours.map(tour => [
+        getKnownTours().map(tour => [
           tour.id,
+          getTourWorkspaceRoot(tour)?.toString(),
           tour.steps.map(step => [step.file, step.anchor])
         ]),
       () => {
@@ -249,14 +284,38 @@ class TourAnchorResolver implements vscode.Disposable {
     const generation = (this.generations.get(key) || 0) + 1;
     this.generations.set(key, generation);
 
-    const workspaceRoot = getWorkspaceUri(tour);
-    const uri = await getStepFileUri(step, workspaceRoot, tour.ref);
+    const workspaceRoot = getTourWorkspaceRoot(tour);
+    const uri = await getStepFileUri(
+      step,
+      workspaceRoot,
+      tour.ref,
+      tour,
+      stepNumber
+    );
     this.publish(key, { state: "pending", uri }, generation);
 
     try {
       const document = await vscode.workspace.openTextDocument(uri);
       let resolution: AnchorResolution;
-      if (step.anchor.type === "content") {
+      if (step.anchor.type === "line") {
+        const line = step.anchor.number - 1;
+        if (
+          !Number.isInteger(step.anchor.number) ||
+          line < 0 ||
+          line >= document.lineCount
+        ) {
+          resolution = { state: "unresolved", uri };
+        } else {
+          const range = document.lineAt(line).range;
+          resolution = {
+            state: "resolved",
+            uri,
+            range,
+            selection: new vscode.Selection(range.start, range.end),
+            documentVersion: document.version
+          };
+        }
+      } else if (step.anchor.type === "content") {
         const expectedText = step.anchor.text.replace(
           /\n/g,
           document.eol === vscode.EndOfLine.CRLF ? "\r\n" : "\n"
@@ -270,10 +329,11 @@ class TourAnchorResolver implements vscode.Disposable {
             document.positionAt(startOffset),
             document.positionAt(endOffset)
           );
+          const displayRange = getFirstLineRange(document, range);
           resolution = {
             state: "resolved",
             uri,
-            range,
+            range: displayRange,
             selection: new vscode.Selection(range.start, range.end),
             documentVersion: document.version,
             startOffset,
@@ -295,17 +355,18 @@ class TourAnchorResolver implements vscode.Disposable {
             resolution = { state: "ambiguous", uri };
           } else {
             const match = matches[0];
+            const displayRange = getFirstLineRange(document, match.range);
             resolution = {
               state: "resolved",
               uri,
-              range: match.selectionRange,
+              range: displayRange,
               selection: new vscode.Selection(
-                match.selectionRange.start,
-                match.selectionRange.end
+                displayRange.start,
+                displayRange.end
               ),
               documentVersion: document.version,
-              startOffset: document.offsetAt(match.selectionRange.start),
-              endOffset: document.offsetAt(match.selectionRange.end)
+              startOffset: document.offsetAt(match.range.start),
+              endOffset: document.offsetAt(match.range.end)
             };
           }
         }
@@ -322,7 +383,7 @@ class TourAnchorResolver implements vscode.Disposable {
 
   async resolveAll() {
     await Promise.all(
-      store.tours.flatMap(tour =>
+      getKnownTours().flatMap(tour =>
         tour.steps.map((step, stepNumber) =>
           step.anchor ? this.resolveStep(tour, stepNumber) : Promise.resolve()
         )
@@ -345,19 +406,24 @@ class TourAnchorResolver implements vscode.Disposable {
   private rebuildSourceWatchers() {
     const required = new Map<
       string,
-      { folder: vscode.WorkspaceFolder; pattern: string }
+      { folder: vscode.WorkspaceFolder | string; pattern: string }
     >();
-    store.tours.forEach(tour => {
-      const folder = vscode.workspace.getWorkspaceFolder(
-        vscode.Uri.parse(tour.id)
-      );
-      if (!folder) {
+    getKnownTours().forEach(tour => {
+      const workspaceRoot = getTourWorkspaceRoot(tour);
+      if (!workspaceRoot) {
+        return;
+      }
+      const folder = vscode.workspace.getWorkspaceFolder(workspaceRoot);
+      const base =
+        folder ||
+        (workspaceRoot.scheme === "file" ? workspaceRoot.fsPath : undefined);
+      if (!base) {
         return;
       }
       tour.steps.forEach(step => {
         if (step.anchor && step.file) {
-          required.set(`${folder.uri.toString()}|${step.file}`, {
-            folder,
+          required.set(`${workspaceRoot.toString()}|${step.file}`, {
+            folder: base,
             pattern: step.file
           });
         }
@@ -386,14 +452,17 @@ class TourAnchorResolver implements vscode.Disposable {
   }
 
   private getStepsForUri(uri: vscode.Uri) {
-    return store.tours.flatMap(tour =>
+    return getKnownTours().flatMap(tour =>
       tour.steps.flatMap((step, stepNumber) => {
         if (!step.anchor || !step.file) {
           return [];
         }
-        const workspaceRoot = getWorkspaceUri(tour);
-        const stepUri = vscode.Uri.joinPath(workspaceRoot!, step.file);
-        return stepUri.toString() === uri.toString()
+        const workspaceRoot = getTourWorkspaceRoot(tour);
+        if (!workspaceRoot) {
+          return [];
+        }
+        const stepUri = getFileUri(step.file, workspaceRoot);
+        return comparableUri(stepUri) === comparableUri(uri)
           ? [{ tour, step, stepNumber }]
           : [];
       })
@@ -465,57 +534,64 @@ class TourAnchorResolver implements vscode.Disposable {
     const autoUpdate = vscode.workspace
       .getConfiguration("codetour")
       .get("autoUpdateAnchors", true);
-    if (autoUpdate) {
-      referencedSteps.forEach(({ tour, step, stepNumber }) => {
-        const key = getAnchorKey(tour, stepNumber);
-        const resolution = this.resolutions.get(key);
-        if (
-          resolution?.state !== "resolved" ||
-          resolution.startOffset === undefined ||
-          resolution.endOffset === undefined
-        ) {
-          return;
-        }
+    referencedSteps.forEach(({ tour, step, stepNumber }) => {
+      const key = getAnchorKey(tour, stepNumber);
+      const resolution = this.resolutions.get(key);
+      if (
+        resolution?.state !== "resolved" ||
+        resolution.startOffset === undefined ||
+        resolution.endOffset === undefined ||
+        (resolution.documentVersion !== undefined &&
+          resolution.documentVersion !== event.document.version - 1)
+      ) {
+        return;
+      }
 
-        const intersects = event.contentChanges.some(change => {
-          const changeEnd = change.rangeOffset + change.rangeLength;
-          return (
-            change.rangeOffset <= resolution.endOffset! &&
-            changeEnd >= resolution.startOffset!
-          );
-        });
-        if (!intersects) {
-          return;
-        }
-
-        const newStart = transformOffset(
-          resolution.startOffset,
-          event.contentChanges,
-          false
+      const intersects = event.contentChanges.some(change => {
+        const changeEnd = change.rangeOffset + change.rangeLength;
+        return (
+          change.rangeOffset <= resolution.endOffset! &&
+          changeEnd >= resolution.startOffset!
         );
-        const newEnd = transformOffset(
-          resolution.endOffset,
-          event.contentChanges,
-          true
-        );
-        if (step.anchor?.type === "content") {
-          const text = normalizeContent(
-            event.document.getText(
-              new vscode.Range(
-                event.document.positionAt(newStart),
-                event.document.positionAt(newEnd)
-              )
-            )
-          );
-          if (text) {
-            step.anchor.text = text;
-            this.scheduleSave(tour);
-          }
-        } else if (step.anchor?.type === "symbol") {
-          this.trackedSymbolOffsets.set(key, newStart);
-        }
       });
-    }
+      const newStart = transformOffset(
+        resolution.startOffset,
+        event.contentChanges,
+        false
+      );
+      const newEnd = transformOffset(
+        resolution.endOffset,
+        event.contentChanges,
+        true
+      );
+      const nextRange = new vscode.Range(
+        event.document.positionAt(newStart),
+        event.document.positionAt(newEnd)
+      );
+      const displayRange = getFirstLineRange(event.document, nextRange);
+      this.resolutions.set(key, {
+        ...resolution,
+        range: displayRange,
+        selection:
+          step.anchor?.type === "symbol"
+            ? new vscode.Selection(displayRange.start, displayRange.end)
+            : new vscode.Selection(nextRange.start, nextRange.end),
+        documentVersion: event.document.version,
+        startOffset: newStart,
+        endOffset: newEnd
+      });
+      this.changeEmitter.fire();
+
+      if (autoUpdate && intersects && step.anchor?.type === "content") {
+        const text = normalizeContent(event.document.getText(nextRange));
+        if (text) {
+          step.anchor.text = text;
+          this.scheduleSave(tour);
+        }
+      } else if (autoUpdate && intersects && step.anchor?.type === "symbol") {
+        this.trackedSymbolOffsets.set(key, newStart);
+      }
+    });
 
     this.scheduleResolveUri(event.document.uri);
   }

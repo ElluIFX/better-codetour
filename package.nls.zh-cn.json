@@ -3,9 +3,6 @@
   "extension.description": "直接在 VS Code 中录制并播放代码库导览。",
   "configuration.title": "CodeTour",
   "configuration.promptForWorkspaceTours": "首次打开包含 Tour 的工作区时显示通知。",
-  "configuration.recordMode": "未选择文本时，控制通过编辑器 gutter 创建的 Tour 步骤采用何种锚点。",
-  "configuration.recordMode.lineNumber": "将步骤绑定到行号。",
-  "configuration.recordMode.pattern": "使用旧版正则表达式格式将步骤绑定到当前行内容。",
   "configuration.showMarkers": "在编辑器 gutter 中显示 Tour 标记。",
   "configuration.customTourDirectory": "用于发现 Tour 的工作区相对目录。",
   "configuration.autoUpdateAnchors": "当源码编辑可以被安全跟踪时，自动更新 Symbol 和内容锚点。",
@@ -34,6 +31,7 @@
   "command.next": "下一步",
   "command.openTourFile": "打开 Tour 文件...",
   "command.openTourUrl": "打开 Tour URL...",
+  "command.openCodeTourPanel": "打开 CodeTour 面板",
   "command.previewTour": "预览 Tour",
   "command.previous": "上一步",
   "command.recordTour": "录制 Tour",
@@ -43,5 +41,6 @@
   "command.startTour": "开始 Tour",
   "command.unmakePrimary": "取消主 Tour",
   "command.viewNotebook": "查看 Notebook",
+  "view.title": "CodeTour",
   "view.welcome": "为当前工作区录制代码导览（[了解更多](https://github.com/ElluIFX/better-codetour#recording-tours)）。\n\n[录制 Tour](command:codetour.recordTour)\n\n也可以打开其他人分享的 Tour。\n\n[打开 Tour 文件](command:codetour.openTourFile)\n\n[打开 Tour URL](command:codetour.openTourUrl)"
 }

@@ -23,6 +23,36 @@ import { getActiveWorkspacePath, getRelativePath } from "../utils";
 
 export { saveTour };
 
+function normalizeSelectedText(text: string) {
+  return text.replace(/\r\n/g, "\n");
+}
+
+function selectionContainsLine(selection: vscode.Selection, line: number) {
+  const endLine =
+    selection.end.character === 0 && selection.end.line > selection.start.line
+      ? selection.end.line - 1
+      : selection.end.line;
+  return line >= selection.start.line && line <= endLine;
+}
+
+export function getGutterStepAnchor(
+  document: vscode.TextDocument,
+  selection: vscode.Selection | undefined,
+  line: number
+): NonNullable<CodeTourStep["anchor"]> {
+  if (
+    selection &&
+    !selection.isEmpty &&
+    selectionContainsLine(selection, line)
+  ) {
+    return {
+      type: "content",
+      text: normalizeSelectedText(document.getText(selection))
+    };
+  }
+  return { type: "line", number: line + 1 };
+}
+
 export function registerRecorderCommands() {
   let pendingRebind:
     | {
@@ -34,28 +64,13 @@ export function registerRecorderCommands() {
       }
     | undefined;
 
-  function normalizeSelectedText(text: string) {
-    return text.replace(/\r\n/g, "\n");
-  }
-
-  function getEditorForUri(uri?: vscode.Uri) {
-    if (!uri) {
-      return vscode.window.activeTextEditor;
-    }
-    return vscode.window.visibleTextEditors.find(
-      editor => editor.document.uri.toString() === uri.toString()
-    );
-  }
-
   function getNonEmptySelection(uri?: vscode.Uri) {
-    const editor = getEditorForUri(uri);
+    const editor = vscode.window.visibleTextEditors.find(
+      candidate => candidate.document.uri.toString() === uri?.toString()
+    );
     return editor && !editor.selection.isEmpty
       ? { editor, selection: editor.selection }
       : undefined;
-  }
-
-  function selectionContainsLine(selection: vscode.Selection, line: number) {
-    return line >= selection.start.line && line <= selection.end.line;
   }
 
   async function insertAnchoredStep(
@@ -91,10 +106,18 @@ export function registerRecorderCommands() {
   onDidEndTour(clearPendingRebind);
 
   function getTourFileUri(workspaceRoot: vscode.Uri, title: string) {
-    const file = title
+    const normalizedTitle = title
+      .normalize("NFKC")
       .toLocaleLowerCase()
-      .replace(/\s/g, "-")
-      .replace(/[^\w\d\-_]/g, "");
+      .replace(/\s+/gu, "-")
+      .replace(/[^\p{L}\p{N}_-]+/gu, "")
+      .replace(/-+/g, "-")
+      .replace(/^-|-$/g, "");
+    const file =
+      normalizedTitle ||
+      `tour-${Array.from(title)
+        .map(character => character.codePointAt(0)!.toString(16))
+        .join("-")}`;
 
     const prefix = workspaceRoot.path.endsWith("/")
       ? workspaceRoot.path
@@ -210,19 +233,11 @@ export function registerRecorderCommands() {
       }
     }
 
-    let ref;
-
-    const mode = vscode.workspace
-      .getConfiguration("codetour")
-      .get("recordMode", "lineNumber");
-
-    if (mode === "lineNumber") {
-      ref = await promptForTourRef(workspaceRoot);
-    }
+    const ref = await promptForTourRef(workspaceRoot);
 
     const tour = await writeTourFile(workspaceRoot, tourTitle, ref);
 
-    startCodeTour(tour, 0, workspaceRoot, true);
+    startCodeTour(tour, undefined, workspaceRoot, true);
 
     vscode.window.showInformationMessage(
       vscode.l10n.t(
@@ -280,7 +295,7 @@ export function registerRecorderCommands() {
                 vscode.l10n.t("Export Tour")
               )
             ) {
-              const content = await exportTour(tour);
+              const content = await exportTour(tour, uri);
               await vscode.workspace.fs.writeFile(
                 uri,
                 new TextEncoder().encode(content)
@@ -416,87 +431,26 @@ export function registerRecorderCommands() {
       };
 
       const selected = getNonEmptySelection(thread!.uri);
-      if (
-        selected &&
-        selectionContainsLine(selected.selection, thread!.range.start.line)
-      ) {
-        step.anchor = {
-          type: "content",
-          text: normalizeSelectedText(
-            selected.editor.document.getText(selected.selection)
-          )
-        };
-      }
-
-      if (!step.anchor) {
-        const mode = vscode.workspace
-          .getConfiguration("codetour")
-          .get("recordMode");
-
-        if (mode === "pattern") {
-          const editor = getEditorForUri(thread!.uri);
-          const contents = editor?.document
-            .lineAt(thread.range.start.line)
-            .text.trim();
-
-          const pattern =
-            "^[^\\S\\n]*" +
-            contents!.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-          const match = editor?.document
-            .getText()
-            .match(new RegExp(pattern, "gm"));
-
-          // If the selected line isn't empty, and its associated
-          // pattern only matches a single line, then use it. Otherwise,
-          // fall back to the line number.
-          if (contents && match && match.length === 1) {
-            step.pattern = pattern;
-          } else {
-            step.line = thread.range.start.line + 1;
-          }
-        } else {
-          step.line = thread.range.start.line + 1;
-        }
-      }
+      step.anchor = getGutterStepAnchor(
+        selected?.editor.document ||
+          (await workspace.openTextDocument(thread!.uri)),
+        selected?.selection,
+        thread!.range.start.line
+      );
 
       store.activeTour!.step++;
 
       const stepNumber = store.activeTour!.step;
 
+      thread!.dispose();
+      store.activeTour!.thread = null;
       tour.steps.splice(stepNumber, 0, step);
 
       store.isEditing = false;
       await vscode.commands.executeCommand("setContext", EDITING_KEY, false);
 
       await saveTour(tour);
-      if (step.anchor) {
-        await anchorResolver.resolveStep(tour, stepNumber);
-      }
-
-      let label = vscode.l10n.t(
-        "Step #{0} of {1}",
-        stepNumber + 1,
-        tour.steps.length
-      );
-
-      const contextValues = [];
-      if (tour.steps.length > 1) {
-        contextValues.push("hasPrevious");
-      }
-
-      if (stepNumber < tour.steps.length - 1) {
-        contextValues.push("hasNext");
-      }
-
-      thread!.contextValue = contextValues.join(".");
-      thread!.comments = [
-        new CodeTourComment(
-          reply.text,
-          label,
-          thread!,
-          vscode.CommentMode.Preview
-        )
-      ];
+      await anchorResolver.resolveStep(tour, stepNumber);
     })
   );
 
@@ -548,20 +502,19 @@ export function registerRecorderCommands() {
 
       clearPendingRebind();
       const workspaceRoot =
-        vscode.workspace.getWorkspaceFolder(vscode.Uri.parse(tour.id))
-          ?.uri || store.activeTour?.workspaceRoot;
+        vscode.workspace.getWorkspaceFolder(vscode.Uri.parse(tour.id))?.uri ||
+        store.activeTour?.workspaceRoot;
       if (!workspaceRoot) {
         return vscode.window.showErrorMessage(
-          vscode.l10n.t("The source workspace for this tour step is unavailable.")
+          vscode.l10n.t(
+            "The source workspace for this tour step is unavailable."
+          )
         );
       }
 
       const uri = vscode.Uri.joinPath(workspaceRoot, step.file);
       const editor = await vscode.window.showTextDocument(uri);
-      const resolution = await anchorResolver.resolveStep(
-        tour,
-        stepNumber
-      );
+      const resolution = await anchorResolver.resolveStep(tour, stepNumber);
       if (resolution?.selection) {
         editor.selection = resolution.selection;
         editor.revealRange(resolution.range!);
@@ -571,7 +524,9 @@ export function registerRecorderCommands() {
         vscode.StatusBarAlignment.Left,
         101
       );
-      confirmItem.text = vscode.l10n.t("$(check) Confirm CodeTour anchor rebind");
+      confirmItem.text = vscode.l10n.t(
+        "$(check) Confirm CodeTour anchor rebind"
+      );
       confirmItem.command = `${EXTENSION_NAME}.confirmAnchorRebind`;
       confirmItem.show();
 
@@ -589,15 +544,19 @@ export function registerRecorderCommands() {
         confirmItem,
         cancelItem
       };
-      void vscode.window.showInformationMessage(
+      const message =
         step.anchor.type === "symbol"
           ? vscode.l10n.t(
               "Place the cursor inside the target symbol, then confirm the anchor rebind."
             )
-          : vscode.l10n.t(
+          : step.anchor.type === "content"
+          ? vscode.l10n.t(
               "Select the target source text, then confirm the anchor rebind."
             )
-      );
+          : vscode.l10n.t(
+              "Place the cursor on the target line, then confirm the anchor rebind."
+            );
+      void vscode.window.showInformationMessage(message);
     }
   );
 
@@ -628,7 +587,7 @@ export function registerRecorderCommands() {
         step.anchor.text = normalizeSelectedText(
           editor.document.getText(editor.selection)
         );
-      } else {
+      } else if (step.anchor.type === "symbol") {
         const symbol = await anchorResolver.findSymbolAt(
           editor.document.uri,
           editor.selection.active
@@ -639,6 +598,8 @@ export function registerRecorderCommands() {
           );
         }
         step.anchor.path = symbol.path;
+      } else {
+        step.anchor.number = editor.selection.active.line + 1;
       }
 
       await saveTour(tour);
@@ -650,14 +611,14 @@ export function registerRecorderCommands() {
     }
   );
 
-  vscode.commands.registerCommand(
-    `${EXTENSION_NAME}.cancelAnchorRebind`,
-    () => clearPendingRebind()
+  vscode.commands.registerCommand(`${EXTENSION_NAME}.cancelAnchorRebind`, () =>
+    clearPendingRebind()
   );
 
   vscode.commands.registerCommand(
     `${EXTENSION_NAME}.previewTour`,
     async (node: CodeTourNode | vscode.CommentThread) => {
+      store.isRecording = false;
       store.isEditing = false;
       await vscode.commands.executeCommand("setContext", EDITING_KEY, false);
       await vscode.commands.executeCommand(
@@ -685,8 +646,9 @@ export function registerRecorderCommands() {
     async (node: CodeTourNode) => {
       const primaryTour = node.tour;
       primaryTour.isPrimary = true;
-      const previousPrimaryTours = store.tours
-        .filter(tour => tour.id !== primaryTour.id && tour.isPrimary)
+      const previousPrimaryTours = store.tours.filter(
+        tour => tour.id !== primaryTour.id && tour.isPrimary
+      );
       previousPrimaryTours.forEach(tour => delete tour.isPrimary);
       await Promise.all([
         saveTour(primaryTour),
@@ -862,20 +824,28 @@ export function registerRecorderCommands() {
     `${EXTENSION_NAME}.changeTourStepLine`,
     async (comment: CodeTourComment) => {
       const step = store.activeTour!.tour.steps[store.activeTour!.step];
+      if (step.anchor?.type !== "line") {
+        return;
+      }
       const response = await vscode.window.showInputBox({
-        prompt: vscode.l10n.t(
-          "Enter the new line number for this tour step. Leave it blank to use the selection or document end."
-        ),
-        value: step.line?.toString() || ""
+        prompt: vscode.l10n.t("Enter the new line number for this tour step."),
+        value: step.anchor.number.toString(),
+        validateInput: value =>
+          Number.isInteger(Number(value)) && Number(value) > 0
+            ? undefined
+            : vscode.l10n.t("Enter a positive integer line number.")
       });
 
-      if (response) {
-        step.line = Number(response);
-      } else {
-        delete step.line;
+      if (!response) {
+        return;
       }
+      step.anchor.number = Number(response);
 
       await saveTour(store.activeTour!.tour);
+      await anchorResolver.resolveStep(
+        store.activeTour!.tour,
+        store.activeTour!.step
+      );
     }
   );
 
@@ -891,7 +861,9 @@ export function registerRecorderCommands() {
 
       if (!workspaceRoot) {
         return vscode.window.showErrorMessage(
-          vscode.l10n.t("The Git ref of an embedded tour file cannot be changed.")
+          vscode.l10n.t(
+            "The Git ref of an embedded tour file cannot be changed."
+          )
         );
       }
 
@@ -974,7 +946,6 @@ export function registerRecorderCommands() {
       } else {
         tour = store.activeTour!.tour;
         steps = [store.activeTour!.step];
-
       }
 
       if (
@@ -1045,7 +1016,8 @@ export function registerRecorderCommands() {
       return;
     }
 
-    const currentBranch = repository.state.HEAD!.name;
+    const head = repository.state.HEAD;
+    const currentBranch = head?.name;
     let items: GitRefQuickPickItem[] = [
       {
         label: vscode.l10n.t("$(circle-slash) None"),
@@ -1054,27 +1026,31 @@ export function registerRecorderCommands() {
         ),
         ref: "HEAD",
         alwaysShow: true
-      },
-      {
+      }
+    ];
+    if (currentBranch) {
+      items.push({
         label: vscode.l10n.t(
           "$(git-branch) Current branch ({0})",
-          currentBranch || "HEAD"
+          currentBranch
         ),
         description: vscode.l10n.t(
           "Allow the tour to apply to all versions of this branch"
         ),
         ref: currentBranch,
         alwaysShow: true
-      },
-      {
+      });
+    }
+    if (head?.commit) {
+      items.push({
         label: vscode.l10n.t("$(git-commit) Current commit"),
         description: vscode.l10n.t(
           "Keep the tour associated with a specific commit"
         ),
-        ref: repository.state.HEAD ? repository.state.HEAD.commit! : "",
+        ref: head.commit,
         alwaysShow: true
-      }
-    ];
+      });
+    }
 
     const tags = repository.state.refs
       .filter(ref => ref.type === RefType.Tag)
@@ -1088,7 +1064,7 @@ export function registerRecorderCommands() {
         ref
       }));
 
-    if (tags) {
+    if (tags.length > 0) {
       items.push(...tags);
     }
 

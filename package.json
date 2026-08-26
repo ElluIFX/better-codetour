@@ -3,7 +3,7 @@
   "displayName": "%extension.displayName%",
   "description": "%extension.description%",
   "publisher": "ElluIFX",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": {
     "name": "ElluIFX",
     "url": "https://github.com/ElluIFX"
@@ -33,7 +33,7 @@
   ],
   "activationEvents": [
     "onStartupFinished",
-    "onNotebookEditor:codetour"
+    "onNotebook:codetour"
   ],
   "main": "./dist/extension-node.js",
   "browser": "./dist/extension-web.js",
@@ -47,19 +47,6 @@
           "type": "boolean",
           "default": true,
           "description": "%configuration.promptForWorkspaceTours%"
-        },
-        "codetour.recordMode": {
-          "type": "string",
-          "enum": [
-            "lineNumber",
-            "pattern"
-          ],
-          "enumDescriptions": [
-            "%configuration.recordMode.lineNumber%",
-            "%configuration.recordMode.pattern%"
-          ],
-          "default": "lineNumber",
-          "description": "%configuration.recordMode%"
         },
         "codetour.showMarkers": {
           "type": "boolean",
@@ -211,6 +198,12 @@
         "command": "codetour.openTourUrl",
         "title": "%command.openTourUrl%",
         "category": "CodeTour"
+      },
+      {
+        "command": "codetour.openCodeTourPanel",
+        "title": "%command.openCodeTourPanel%",
+        "category": "CodeTour",
+        "icon": "$(list-tree)"
       },
       {
         "command": "codetour.previewTour",
@@ -431,12 +424,12 @@
         {
           "command": "codetour.changeTourStepLine",
           "group": "mutate@1",
-          "when": "commentController == codetour && codetour:canEditTour && !(commentThread =~ /hasAnchor/)"
+          "when": "commentController == codetour && codetour:canEditTour && commentThread =~ /lineAnchor/"
         },
         {
           "command": "codetour.rebindTourStepAnchor",
           "group": "mutate@1",
-          "when": "commentController == codetour && codetour:canEditTour && commentThread =~ /hasAnchor/"
+          "when": "commentController == codetour && codetour:canEditTour && commentThread =~ /resilientAnchor/"
         },
         {
           "command": "codetour.deleteTourStep",
@@ -501,7 +494,7 @@
         },
         {
           "command": "codetour.viewNotebook",
-          "when": "false",
+          "when": "viewItem =~ /^codetour.tour/",
           "group": "basic@2"
         },
         {
@@ -633,7 +626,7 @@
       "explorer": [
         {
           "id": "codetour.tours",
-          "name": "CodeTour",
+          "name": "%view.title%",
           "when": "workspaceFolderCount != 0 || codetour:inTour"
         }
       ]
@@ -684,9 +677,9 @@
         ]
       }
     ],
-    "notebookProvider": [
+    "notebooks": [
       {
-        "viewType": "codetour",
+        "type": "codetour",
         "displayName": "CodeTour",
         "selector": [
           {

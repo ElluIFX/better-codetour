@@ -13,7 +13,7 @@ import {
 } from "vscode";
 import { CodeTour, store } from ".";
 import { EXTENSION_NAME, FS_SCHEME, FS_SCHEME_CONTENT } from "../constants";
-import { startPlayer, stopPlayer } from "../player";
+import { refreshCommentingRanges, startPlayer, stopPlayer } from "../player";
 import {
   getStepFileUri,
   getWorkspaceKey,
@@ -21,6 +21,7 @@ import {
   readUriContents
 } from "../utils";
 import { progress } from "./storage";
+import { ensureTourSchema, getTourSchemaReference } from "./persistence";
 
 const CAN_EDIT_TOUR_KEY = `${EXTENSION_NAME}:canEditTour`;
 const IN_TOUR_KEY = `${EXTENSION_NAME}:inTour`;
@@ -48,7 +49,8 @@ export function startCodeTour(
   workspaceRoot?: Uri,
   startInEditMode: boolean = false,
   canEditTour: boolean = true,
-  tours?: CodeTour[]
+  tours?: CodeTour[],
+  fireEvent: boolean = true
 ) {
   startPlayer();
 
@@ -74,7 +76,8 @@ export function startCodeTour(
     store.isEditing = true;
     commands.executeCommand("setContext", RECORDING_KEY, true);
     commands.executeCommand("setContext", EDITING_KEY, true);
-  } else {
+    refreshCommentingRanges();
+  } else if (fireEvent) {
     _onDidStartTour.fire([tour, step]);
   }
 }
@@ -229,23 +232,30 @@ export async function startDefaultTour(
   }
 }
 
-export async function exportTour(tour: CodeTour) {
+export async function exportTour(tour: CodeTour, targetUri: Uri) {
+  await ensureTourSchema(targetUri);
+  const { $schema: _schema, id: _id, ref: _ref, ...tourData } = tour;
   const newTour: Partial<CodeTour> = {
-    ...tour
+    $schema: getTourSchemaReference(targetUri),
+    ...tourData
   };
 
   if (newTour.steps) {
     newTour.steps = await Promise.all(
-      newTour.steps.map(async step => {
-        if (step.contents || step.uri || !step.file) {
+      newTour.steps.map(async (step, stepNumber) => {
+        if (step.contents !== undefined || step.uri || !step.file) {
           return step;
         }
 
         const workspaceRoot = getWorkspaceUri(tour);
-        const stepFileUri = await getStepFileUri(step, workspaceRoot, tour.ref);
+        const stepFileUri = await getStepFileUri(
+          step,
+          workspaceRoot,
+          tour.ref,
+          tour,
+          stepNumber
+        );
         const contents = await readUriContents(stepFileUri);
-
-        delete step.markerTitle;
 
         return {
           ...step,
@@ -254,9 +264,6 @@ export async function exportTour(tour: CodeTour) {
       })
     );
   }
-
-  delete newTour.id;
-  delete newTour.ref;
 
   return JSON.stringify(newTour, null, 2);
 }

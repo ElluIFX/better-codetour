@@ -7,15 +7,18 @@ import * as vscode from "vscode";
 import { CodeTour } from ".";
 import { readUriContents } from "../utils";
 
-const REMOTE_SCHEMA = "https://aka.ms/codetour-schema";
 const LOCAL_SCHEMA = "./schema.json";
 const SCHEMA_FILE = "schema.json";
 
 let extensionUri: vscode.Uri | undefined;
 const writeQueues = new Map<string, Promise<void>>();
+const didSaveTourEmitter = new vscode.EventEmitter<vscode.Uri>();
+
+export const onDidSaveTour = didSaveTourEmitter.event;
 
 export function initializeTourPersistence(context: vscode.ExtensionContext) {
   extensionUri = context.extensionUri;
+  context.subscriptions.push(didSaveTourEmitter);
 }
 
 function enqueueWrite(
@@ -36,11 +39,6 @@ function enqueueWrite(
 }
 
 export function getTourSchemaReference(tourUri: vscode.Uri): string {
-  const workspaceFolder = vscode.workspace.getWorkspaceFolder(tourUri);
-  if (!workspaceFolder) {
-    return REMOTE_SCHEMA;
-  }
-
   return LOCAL_SCHEMA;
 }
 
@@ -71,7 +69,7 @@ async function ensureSchema(targetUri: vscode.Uri): Promise<void> {
   );
 }
 
-function ensureTourSchema(tourUri: vscode.Uri): Promise<void> {
+export function ensureTourSchema(tourUri: vscode.Uri): Promise<void> {
   const targetUri = tourUri.with({
     path: path.posix.join(path.posix.dirname(tourUri.path), SCHEMA_FILE)
   });
@@ -121,20 +119,17 @@ export async function migrateTourSchemas(tours: readonly CodeTour[]) {
 
 export async function saveTour(tour: CodeTour): Promise<void> {
   const uri = vscode.Uri.parse(tour.id);
-  const workspaceFolder = vscode.workspace.getWorkspaceFolder(uri);
-  if (workspaceFolder) {
-    await ensureTourSchema(uri);
-  }
+  await ensureTourSchema(uri);
 
+  const { $schema: _schema, id: _id, ...tourData } = tour;
   const persistedTour = {
     $schema: getTourSchemaReference(uri),
-    ...tour,
-    steps: tour.steps.map(({ markerTitle: _markerTitle, ...step }) => step)
-  } as Partial<CodeTour> & { $schema: string };
-  delete persistedTour.id;
+    ...tourData
+  };
 
   const bytes = new TextEncoder().encode(
     JSON.stringify(persistedTour, null, 2)
   );
   await enqueueWrite(uri, () => vscode.workspace.fs.writeFile(uri, bytes));
+  didSaveTourEmitter.fire(uri);
 }

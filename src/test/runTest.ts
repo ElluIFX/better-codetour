@@ -19,7 +19,7 @@ async function main() {
     await runTests({
       extensionDevelopmentPath: path.resolve(__dirname, "../.."),
       extensionTestsPath: path.resolve(__dirname, "suite"),
-      launchArgs: [workspacePath, "--disable-extensions"]
+      launchArgs: [workspacePath, "--locale=zh-cn"]
     });
   } finally {
     await fs.rm(workspacePath, { recursive: true, force: true });
