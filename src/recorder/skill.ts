@@ -4,58 +4,148 @@ import { ensureTourSchema } from "../store/persistence";
 
 const CODETOUR_AUTHORING_SKILL = `---
 name: codetour-authoring
-description: Create or revise Better CodeTour .tour files for focused, readable codebase walkthroughs using line, content, and symbol anchors.
+description: Create, review, or revise Better CodeTour .tour files for focused codebase walkthroughs using valid line, content, and symbol anchors.
 ---
 
 # CodeTour Authoring
 
-Create a guided reading path through the requested code. Preserve source files unless the user also requests code changes.
+Create a guided reading path that answers a specific question about a codebase. Preserve source files unless the user also requests code changes.
 
-## Ground the Tour
+## Establish the Reading Path
 
-Inspect the relevant code, repository structure, existing tours, and \`.tours/schema.json\`. Identify the intended reader and the question the tour should answer. Arrange steps by execution flow, ownership, state changes, or another coherent narrative rather than file order alone.
+Before writing:
+
+1. Read \`.tours/schema.json\`, relevant source files, and existing tours.
+2. Identify the intended reader, required prior knowledge, and the question the tour must answer.
+3. Outline the smallest coherent path through entry points, important transitions, and the final outcome.
+4. Choose the source location that best demonstrates each point.
+
+Order steps by execution flow, data flow, lifecycle, ownership, or another explicit narrative. File order alone rarely forms a useful explanation.
 
 ## Balance Information and Step Count
 
-Use one step for one responsibility, decision, invariant, transition, or important handoff. Merge nearby code when it explains the same idea. Split when the reader changes subsystem, abstraction level, lifecycle phase, or question.
+Treat one step as one cognitive unit: a responsibility, decision, invariant, state transition, or important handoff.
 
-Prefer representative code over exhaustive coverage. Remove line-by-line paraphrases, repeated setup, incidental helpers, generated code, and steps that do not change the reader's understanding. There is no fixed step count: keep the smallest sequence that answers the tour's question without overloading individual descriptions.
+- Merge nearby locations when they support the same conclusion and can share one concise explanation.
+- Split a step when it changes subsystem, abstraction level, lifecycle phase, or the question being answered.
+- Give complex ownership boundaries, state changes, and failure handling their own step when they are essential to the tour.
+- Remove steps that only paraphrase code, repeat context, or name incidental helpers.
+- Prefer representative code over exhaustive coverage.
 
-## Choose Anchors
+There is no fixed ideal number of steps. Keep the smallest sequence that answers the stated question while allowing each description to remain focused.
 
-Every file step contains \`file\` and exactly one \`anchor\`.
+## Create a Valid Tour File
 
-Prefer a symbol anchor for a named declaration reported by the language server. Store the complete outer-to-inner path and canonical English SymbolKind names:
+Store UTF-8 JSON under \`.tours\`, use a lowercase kebab-case filename, and point to the colocated schema:
 
 \`\`\`json
-"anchor": {
-  "type": "symbol",
-  "path": [
-    { "name": "TourProvider", "kind": "Class" },
-    { "name": "refresh", "kind": "Method" }
+{
+  "$schema": "./schema.json",
+  "title": "How requests reach the worker",
+  "description": "Follow one request from ingress to execution.",
+  "steps": [
+    {
+      "file": "src/server.ts",
+      "anchor": { "type": "line", "number": 42 },
+      "description": "This handler validates the request before it enters the queue."
+    }
   ]
 }
 \`\`\`
 
-Use a content anchor for a stable, distinctive exact text block when no suitable symbol exists. Select the smallest useful block and remember that playback uses the first exact match.
+Every file step contains \`file\`, \`description\`, and exactly one \`anchor\`. Use workspace-relative paths with forward slashes. Follow \`.tours/schema.json\` for non-file step types and optional fields.
 
-Use a one-based line anchor when symbol and content anchors are unsuitable:
+## Choose Anchors
+
+Choose the most stable anchor that identifies the intended code. Prefer symbol, then content, then line when each option is suitable.
+
+### Symbol Anchor
+
+Use a symbol anchor for a named declaration returned by the active VS Code document symbol provider. Confirm that language support is enabled for the file. Store the complete outer-to-inner path and canonical English SymbolKind names such as \`Class\`, \`Method\`, \`Function\`, or \`Variable\`:
 
 \`\`\`json
-"anchor": { "type": "line", "number": 42 }
+{
+  "file": "src/tourProvider.ts",
+  "anchor": {
+    "type": "symbol",
+    "path": [
+      { "name": "TourProvider", "kind": "Class" },
+      { "name": "refresh", "kind": "Method" }
+    ]
+  },
+  "description": "Refresh rebuilds the panel model from the latest discovered tours."
+}
 \`\`\`
 
-Do not use legacy top-level line or multi-line fields.
+Use the innermost named symbol that owns the behavior being explained. Include parent symbols when needed to distinguish methods or members with the same name. Playback displays the message on the symbol's first line.
 
-## Write Steps
+### Content Anchor
 
-Lead with why the selected code matters, then explain its key behavior, constraint, or design decision. Connect adjacent steps when the transition is meaningful. Keep titles short and descriptions concise. Add code blocks only when the excerpt is necessary to the explanation.
+Use a content anchor when the relevant code has no suitable document symbol or when a precise statement or block is the subject of the explanation. The \`text\` value is a literal exact match after line endings are normalized. Whitespace, indentation, punctuation, and comments are part of the match. Playback uses the first occurrence in the file and displays the message on its first line.
 
-Store UTF-8 JSON files under \`.tours\`, use a lowercase kebab-case filename, and set \`"$schema": "./schema.json"\`.
+Single-line example:
+
+\`\`\`json
+{
+  "file": "src/store.ts",
+  "anchor": {
+    "type": "content",
+    "text": "store.tours = discoveredTours;"
+  },
+  "description": "This assignment publishes the refreshed tour list to the observable store."
+}
+\`\`\`
+
+Multi-line example; encode line breaks as \`\\n\` inside JSON strings:
+
+\`\`\`json
+{
+  "file": "src/worker.ts",
+  "anchor": {
+    "type": "content",
+    "text": "const task = queue.shift();\\nreturn task.execute();"
+  },
+  "description": "The worker removes one queued task and immediately transfers control to it."
+}
+\`\`\`
+
+Select content deliberately:
+
+- Copy the exact source text, preserving indentation and spacing.
+- Include enough stable context to make the first occurrence the intended location.
+- Keep the block as small as possible while retaining uniqueness and meaning.
+- Avoid generated text, volatile literals, formatting-only lines, and broad blocks likely to change together.
+- If the text occurs more than once, extend the selection with stable adjacent syntax or use a symbol anchor.
+- Verify that an exact search finds the intended block first.
+
+### Line Anchor
+
+Use a one-based line anchor when symbol and content anchors are unsuitable or the exact line position is the subject:
+
+\`\`\`json
+{
+  "file": "config/defaults.ts",
+  "anchor": { "type": "line", "number": 42 },
+  "description": "This default controls the initial worker concurrency."
+}
+\`\`\`
+
+Use only \`anchor: { "type": "line", "number": ... }\`. Do not write legacy top-level line or multi-line fields.
+
+## Write Explanations
+
+Lead with the role of the selected code in the tour. Explain the key behavior, constraint, or design decision, then state the transition to the next step when it matters. Keep titles short and specific. Use concise Markdown and add code blocks only when the excerpt itself is necessary.
+
+Descriptions should add information the reader cannot obtain by merely reading the selected lines. State concrete responsibilities, inputs, outputs, state changes, and ownership. Keep background near the first step that needs it.
 
 ## Validate
 
-Before finishing, validate the JSON against \`.tours/schema.json\`, resolve every anchor, play the steps in order, and remove redundant or overloaded steps.
+Before finishing:
+
+1. Parse the file as JSON and validate it against \`.tours/schema.json\`.
+2. Resolve every anchor; confirm content anchors select the intended first exact match and symbol anchors use the provider's actual path and kind.
+3. Play the tour in order and verify that each step advances the narrative.
+4. Merge repetitive steps, split overloaded steps, and remove explanations that only restate source text.
 `;
 
 interface WorkspaceItem extends vscode.QuickPickItem {

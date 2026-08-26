@@ -120,6 +120,20 @@ describe("resilient tour anchors", () => {
     assert.strictEqual(chinese["Start Tour"], "开始 Tour");
   });
 
+  it("creates actionable CodeTour authoring guidance", async () => {
+    await vscode.commands.executeCommand("codetour.createSkills");
+    const skill = new TextDecoder().decode(
+      await vscode.workspace.fs.readFile(
+        vscode.Uri.joinPath(getWorkspaceRoot(), ".tours", "SKILL.md")
+      )
+    );
+    assert.ok(skill.startsWith("---\nname: codetour-authoring\n"));
+    assert.ok(skill.includes('"type": "content"'));
+    assert.ok(skill.includes("first occurrence in the file"));
+    assert.ok(skill.includes("encode line breaks"));
+    assert.ok(skill.includes('"kind": "Method"'));
+  });
+
   it("defines only the three anchor formats in the bundled schema", async () => {
     const schema = JSON.parse(
       new TextDecoder().decode(
