@@ -10,6 +10,7 @@ import { api, RefType } from "../git";
 import { CodeTourComment } from "../player";
 import { CodeTourNode, CodeTourStepNode } from "../player/tree/nodes";
 import { CodeTour, CodeTourStep, store } from "../store";
+import { saveTour } from "../store/persistence";
 import {
   EDITING_KEY,
   endCurrentCodeTour,
@@ -19,24 +20,7 @@ import {
 } from "../store/actions";
 import { getActiveWorkspacePath, getRelativePath } from "../utils";
 
-export async function saveTour(tour: CodeTour) {
-  const uri = vscode.Uri.parse(tour.id);
-  const newTour = {
-    $schema: "https://aka.ms/codetour-schema",
-    ...tour
-  };
-
-  // @ts-ignore
-  delete newTour.id;
-  newTour.steps.forEach(step => {
-    delete step.markerTitle;
-  });
-
-  const tourContent = JSON.stringify(newTour, null, 2);
-
-  const bytes = new TextEncoder().encode(tourContent);
-  await vscode.workspace.fs.writeFile(uri, bytes);
-}
+export { saveTour };
 
 export function registerRecorderCommands() {
   function getTourFileUri(workspaceRoot: vscode.Uri, title: string) {
@@ -84,23 +68,20 @@ export function registerRecorderCommands() {
         : path.basename(title.path).replace(".tour", "");
 
     const tour = {
-      $schema: "https://aka.ms/codetour-schema",
+      id: decodeURIComponent(uri.toString()),
       title: tourTitle,
       steps: []
-    };
+    } as CodeTour;
 
     if (ref && ref !== "HEAD") {
-      (tour as any).ref = ref;
+      tour.ref = ref;
     }
 
-    const tourContent = JSON.stringify(tour, null, 2);
-    const bytes = new TextEncoder().encode(tourContent);
-    await vscode.workspace.fs.writeFile(uri, bytes);
-
-    (tour as any).id = decodeURIComponent(uri.toString());
-
-    // @ts-ignore
-    return tour as CodeTour;
+    await vscode.workspace.fs.createDirectory(
+      uri.with({ path: path.posix.dirname(uri.path) })
+    );
+    await saveTour(tour);
+    return tour;
   }
 
   interface WorkspaceQuickPickItem extends vscode.QuickPickItem {

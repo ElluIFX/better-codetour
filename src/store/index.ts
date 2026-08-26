@@ -9,6 +9,30 @@ export interface CodeTourStepPosition {
   character: number;
 }
 
+export interface CodeTourSymbolPathSegment {
+  name: string;
+  kind: number;
+}
+
+export interface CodeTourSymbolAnchor {
+  type: "symbol";
+  path: CodeTourSymbolPathSegment[];
+}
+
+export interface CodeTourContentAnchor {
+  type: "content";
+  text: string;
+}
+
+export type CodeTourAnchor = CodeTourSymbolAnchor | CodeTourContentAnchor;
+
+export type CodeTourAnchorState =
+  | "pending"
+  | "resolved"
+  | "unresolved"
+  | "unsupported"
+  | "ambiguous";
+
 export interface CodeTourStep {
   title?: string;
   description: string;
@@ -34,6 +58,7 @@ export interface CodeTourStep {
 
   pattern?: string;
   markerTitle?: string;
+  anchor?: CodeTourAnchor;
 }
 
 export interface CodeTour {

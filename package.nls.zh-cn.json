@@ -1,0 +1,17 @@
+{
+  "extension.displayName": "CodeTour",
+  "extension.description": "直接在 VS Code 中录制并播放代码库导览。",
+  "configuration.title": "CodeTour",
+  "configuration.promptForWorkspaceTours": "首次打开包含 Tour 的工作区时显示通知。",
+  "configuration.recordMode": "未选择文本时，控制通过编辑器 gutter 创建的 Tour 步骤采用何种锚点。",
+  "configuration.recordMode.lineNumber": "将步骤绑定到行号。",
+  "configuration.recordMode.pattern": "使用旧版正则表达式格式将步骤绑定到当前行内容。",
+  "configuration.showMarkers": "在编辑器 gutter 中显示 Tour 标记。",
+  "configuration.customTourDirectory": "用于发现 Tour 的工作区相对目录。",
+  "configuration.autoUpdateAnchors": "当源码编辑可以被安全跟踪时，自动更新 Symbol 和内容锚点。",
+  "command.addContentMatchStep": "添加内容匹配的 CodeTour 步骤",
+  "command.addSymbolStep": "添加 Symbol 绑定的 CodeTour 步骤",
+  "command.rebindTourStepAnchor": "重新绑定 Tour 步骤锚点",
+  "command.confirmAnchorRebind": "确认重新绑定锚点",
+  "command.cancelAnchorRebind": "取消重新绑定锚点"
+}

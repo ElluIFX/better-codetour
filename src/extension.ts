@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import * as vscode from "vscode";
+import { anchorResolver } from "./anchors";
 import { initializeApi } from "./api";
 import { initializeGitApi } from "./git";
 import { registerLiveShareModule } from "./liveShare";
@@ -13,7 +14,11 @@ import {
   startCodeTour,
   startDefaultTour
 } from "./store/actions";
-import { discoverTours as _discoverTours } from "./store/provider";
+import {
+  discoverTours as _discoverTours,
+  registerTourProvider
+} from "./store/provider";
+import { initializeTourPersistence } from "./store/persistence";
 
 /**
  * In order to check whether the URI handler was called on activation,
@@ -75,9 +80,12 @@ class URIHandler implements vscode.UriHandler {
 }
 
 export async function activate(context: vscode.ExtensionContext) {
+  initializeTourPersistence(context);
+  registerTourProvider(context);
   registerPlayerModule(context);
   registerRecorderModule();
   registerLiveShareModule();
+  anchorResolver.register(context);
 
   const uriHandler = new URIHandler();
   context.subscriptions.push(vscode.window.registerUriHandler(uriHandler));

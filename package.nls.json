@@ -1,0 +1,17 @@
+{
+  "extension.displayName": "CodeTour",
+  "extension.description": "Record and play guided tours of codebases directly in VS Code.",
+  "configuration.title": "CodeTour",
+  "configuration.promptForWorkspaceTours": "Show a notification when a workspace containing tours is opened for the first time.",
+  "configuration.recordMode": "Controls how a gutter tour step is anchored when no text is selected.",
+  "configuration.recordMode.lineNumber": "Anchor the step to a line number.",
+  "configuration.recordMode.pattern": "Anchor the step to the current line contents using the legacy regular expression format.",
+  "configuration.showMarkers": "Show tour markers in the editor gutter.",
+  "configuration.customTourDirectory": "Custom workspace-relative directory used to discover tours.",
+  "configuration.autoUpdateAnchors": "Automatically update symbol and content anchors when monitored source edits can be tracked safely.",
+  "command.addContentMatchStep": "Add Content-Matched CodeTour Step",
+  "command.addSymbolStep": "Add Symbol-Bound CodeTour Step",
+  "command.rebindTourStepAnchor": "Rebind Tour Step Anchor",
+  "command.confirmAnchorRebind": "Confirm Anchor Rebind",
+  "command.cancelAnchorRebind": "Cancel Anchor Rebind"
+}

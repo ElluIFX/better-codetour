@@ -9,6 +9,7 @@ import { CodeTour, store } from ".";
 import { EXTENSION_NAME, VSCODE_DIRECTORY } from "../constants";
 import { readUriContents, updateMarkerTitles } from "../utils";
 import { endCurrentCodeTour } from "./actions";
+import { migrateTourSchemas } from "./persistence";
 
 export const MAIN_TOUR_FILES = [
   ".tour",
@@ -16,14 +17,13 @@ export const MAIN_TOUR_FILES = [
   "main.tour"
 ];
 
-const SUB_TOUR_DIRECTORIES = [
+const DEFAULT_TOUR_DIRECTORIES = [
   `${VSCODE_DIRECTORY}/tours`,
   ".github/tours",
-  `.tours`
+  ".tours"
 ];
 
 const HAS_TOURS_KEY = `${EXTENSION_NAME}:hasTours`;
-
 const PLATFORM = os.platform();
 const TOUR_CONTEXT = {
   isLinux: PLATFORM === "linux",
@@ -32,96 +32,120 @@ const TOUR_CONTEXT = {
   isWeb: vscode.env.uiKind === vscode.UIKind.Web
 };
 
-const customDirectory = vscode.workspace
-  .getConfiguration(EXTENSION_NAME)
-  .get("customTourDirectory", null);
+let discoveryGeneration = 0;
+let discoveryTimer: ReturnType<typeof setTimeout> | undefined;
+let watchers: vscode.FileSystemWatcher[] = [];
 
-if (customDirectory) {
-  SUB_TOUR_DIRECTORIES.push(customDirectory);
+function getTourDirectories() {
+  const customDirectory = vscode.workspace
+    .getConfiguration(EXTENSION_NAME)
+    .get<string | null>("customTourDirectory", null);
+  return Array.from(
+    new Set(
+      [
+        ...DEFAULT_TOUR_DIRECTORIES,
+        customDirectory?.replace(/\\/g, "/").replace(/^\.\//, "")
+      ].filter((directory): directory is string => !!directory)
+    )
+  );
+}
+
+function canShowTour(tour: CodeTour) {
+  if (!tour.when) {
+    return true;
+  }
+  try {
+    return Boolean(jexl.evalSync(tour.when, TOUR_CONTEXT));
+  } catch (error) {
+    console.warn(`Unable to evaluate the CodeTour condition for ${tour.id}.`, error);
+    return false;
+  }
 }
 
 export async function discoverTours(): Promise<void> {
-  const tours = await Promise.all(
-    vscode.workspace.workspaceFolders!.map(async workspaceFolder => {
-      const mainTours = await discoverMainTours(workspaceFolder.uri);
-      const tours = await discoverSubTours(workspaceFolder.uri);
-
-      if (mainTours) {
-        tours.push(...mainTours);
-      }
-
-      return tours;
+  const generation = ++discoveryGeneration;
+  const folders = vscode.workspace.workspaceFolders || [];
+  const discovered = await Promise.all(
+    folders.map(async workspaceFolder => {
+      const [mainTours, subTours] = await Promise.all([
+        discoverMainTours(workspaceFolder.uri),
+        discoverSubTours(workspaceFolder.uri)
+      ]);
+      return [...mainTours, ...subTours];
     })
   );
+  if (generation !== discoveryGeneration) {
+    return;
+  }
 
   runInAction(() => {
-    store.tours = tours
+    store.tours = discovered
       .flat()
-      .sort((a, b) => a.title.localeCompare(b.title))
-      .filter(tour => !tour.when || jexl.evalSync(tour.when, TOUR_CONTEXT));
+      .sort((left, right) => left.title.localeCompare(right.title))
+      .filter(canShowTour);
 
     if (store.activeTour) {
-      const tour = store.tours.find(
+      const activeTour = store.tours.find(
         tour => tour.id === store.activeTour!.tour.id
       );
-
-      if (tour) {
-        if (!comparer.structural(store.activeTour.tour, tour)) {
-          // Since the active tour could be already observed,
-          // we want to update it in place with the new properties.
-          set(store.activeTour.tour, tour);
+      if (activeTour) {
+        if (!comparer.structural(store.activeTour.tour, activeTour)) {
+          set(store.activeTour.tour, activeTour);
         }
       } else {
-        // The user deleted the tour
-        // file that's associated with
-        // the active tour, so end it
-        endCurrentCodeTour();
+        void endCurrentCodeTour();
       }
     }
   });
 
-  vscode.commands.executeCommand("setContext", HAS_TOURS_KEY, store.hasTours);
-
-  updateMarkerTitles();
+  await vscode.commands.executeCommand(
+    "setContext",
+    HAS_TOURS_KEY,
+    store.hasTours
+  );
+  await updateMarkerTitles();
+  void migrateTourSchemas(store.tours);
 }
 
-async function discoverMainTours(
-  workspaceUri: vscode.Uri
-): Promise<CodeTour[]> {
+function scheduleDiscovery() {
+  if (discoveryTimer) {
+    clearTimeout(discoveryTimer);
+  }
+  discoveryTimer = setTimeout(() => {
+    discoveryTimer = undefined;
+    void discoverTours();
+  }, 100);
+}
+
+async function discoverMainTours(workspaceUri: vscode.Uri) {
   const tours = await Promise.all(
-    MAIN_TOUR_FILES.map(async tourFile => {
-      try {
-        const uri = vscode.Uri.joinPath(workspaceUri, tourFile);
-
-        const mainTourContent = await readUriContents(uri);
-        const tour = JSON.parse(mainTourContent);
-        tour.id = decodeURIComponent(uri.toString());
-        return tour;
-      } catch {}
-    })
+    MAIN_TOUR_FILES.map(tourFile =>
+      readTourFile(vscode.Uri.joinPath(workspaceUri, tourFile))
+    )
   );
-
-  return tours.filter(tour => tour);
+  return tours.filter((tour): tour is CodeTour => !!tour);
 }
 
 async function readTourDirectory(uri: vscode.Uri): Promise<CodeTour[]> {
   try {
-    const tourFiles = await vscode.workspace.fs.readDirectory(uri);
+    const entries = await vscode.workspace.fs.readDirectory(uri);
     const tours = await Promise.all(
-      tourFiles.map(async ([file, type]) => {
+      entries.map(async ([file, type]): Promise<CodeTour | CodeTour[]> => {
         const fileUri = vscode.Uri.joinPath(uri, file);
-        if (type === vscode.FileType.File) {
-          return readTourFile(fileUri);
-        } else if (type === vscode.FileType.SymbolicLink) {
-          return readTourFile(fileUri)
-        } else {
+        if (type === vscode.FileType.Directory) {
           return readTourDirectory(fileUri);
         }
+        if (
+          (type === vscode.FileType.File ||
+            type === vscode.FileType.SymbolicLink) &&
+          file.toLocaleLowerCase().endsWith(".tour")
+        ) {
+          return (await readTourFile(fileUri)) || [];
+        }
+        return [];
       })
     );
-
-    // @ts-ignore
-    return tours.flat().filter(tour => tour);
+    return tours.flat().filter((tour): tour is CodeTour => !!tour);
   } catch {
     return [];
   }
@@ -131,30 +155,74 @@ async function readTourFile(
   tourUri: vscode.Uri
 ): Promise<CodeTour | undefined> {
   try {
-    const tourContent = await readUriContents(tourUri);
-    const tour = JSON.parse(tourContent);
+    const tour = JSON.parse(await readUriContents(tourUri)) as CodeTour;
+    if (!tour.title || !Array.isArray(tour.steps)) {
+      throw new Error("The tour must contain a title and steps array.");
+    }
     tour.id = decodeURIComponent(tourUri.toString());
     return tour;
-  } catch {}
+  } catch (error) {
+    if (!(error instanceof vscode.FileSystemError)) {
+      console.warn(`Unable to read CodeTour file ${tourUri.toString()}.`, error);
+    }
+    return undefined;
+  }
 }
 
-async function discoverSubTours(workspaceUri: vscode.Uri): Promise<CodeTour[]> {
+async function discoverSubTours(workspaceUri: vscode.Uri) {
   const tours = await Promise.all(
-    SUB_TOUR_DIRECTORIES.map(directory => {
-      const uri = vscode.Uri.joinPath(workspaceUri, directory);
-      return readTourDirectory(uri);
-    })
+    getTourDirectories().map(directory =>
+      readTourDirectory(vscode.Uri.joinPath(workspaceUri, directory))
+    )
   );
-
   return tours.flat();
 }
 
-vscode.workspace.onDidChangeWorkspaceFolders(discoverTours);
+function disposeWatchers() {
+  watchers.forEach(watcher => watcher.dispose());
+  watchers = [];
+}
 
-const watcher = vscode.workspace.createFileSystemWatcher(
-  `**/{${SUB_TOUR_DIRECTORIES.join(",")}}/**/*.tour`
-);
+function rebuildWatchers() {
+  disposeWatchers();
+  const folders = vscode.workspace.workspaceFolders || [];
+  const patterns = [
+    ...MAIN_TOUR_FILES,
+    ...getTourDirectories().map(directory => `${directory}/**/*.tour`)
+  ];
+  folders.forEach(folder => {
+    patterns.forEach(pattern => {
+      const watcher = vscode.workspace.createFileSystemWatcher(
+        new vscode.RelativePattern(folder, pattern)
+      );
+      watcher.onDidCreate(scheduleDiscovery);
+      watcher.onDidChange(scheduleDiscovery);
+      watcher.onDidDelete(scheduleDiscovery);
+      watchers.push(watcher);
+    });
+  });
+}
 
-watcher.onDidChange(discoverTours);
-watcher.onDidCreate(discoverTours);
-watcher.onDidDelete(discoverTours);
+export function registerTourProvider(context: vscode.ExtensionContext) {
+  rebuildWatchers();
+  context.subscriptions.push(
+    {
+      dispose() {
+        disposeWatchers();
+        if (discoveryTimer) {
+          clearTimeout(discoveryTimer);
+        }
+      }
+    },
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      rebuildWatchers();
+      scheduleDiscovery();
+    }),
+    vscode.workspace.onDidChangeConfiguration(event => {
+      if (event.affectsConfiguration(`${EXTENSION_NAME}.customTourDirectory`)) {
+        rebuildWatchers();
+        scheduleDiscovery();
+      }
+    })
+  );
+}
