@@ -7,10 +7,17 @@ import * as os from "os";
 import * as path from "path";
 import * as vscode from "vscode";
 import { CodeTour, store } from ".";
+import { anchorResolver } from "../anchors";
 import { EXTENSION_NAME, VSCODE_DIRECTORY } from "../constants";
 import { readUriContents } from "../utils";
+import {
+  cancelActiveTourEdit,
+  hasPendingActiveTourEdit,
+  mergeExternalTourDuringEdit
+} from "../recorder/editSession";
 import { endCurrentCodeTour } from "./actions";
 import { migrateTourSchemas, onDidSaveTour } from "./persistence";
+import { parseCodeTour } from "./validation";
 
 export const MAIN_TOUR_FILES = [
   ".tour",
@@ -37,6 +44,7 @@ let discoveryGeneration = 0;
 let discoveryTimer: ReturnType<typeof setTimeout> | undefined;
 let watchers: vscode.FileSystemWatcher[] = [];
 let isInitialDiscovery = true;
+let manualRefresh: Promise<number> | undefined;
 const lastValidTours = new Map<string, CodeTour>();
 const deletedTourUris = new Set<string>();
 
@@ -88,17 +96,27 @@ export async function discoverTours(): Promise<void> {
     return;
   }
 
+  const nextTours = discovered
+    .flat()
+    .sort((left, right) => left.title.localeCompare(right.title))
+    .filter(canShowTour)
+    .map(tour => anchorResolver.mergePendingTour(tour));
+  let activeTourWasDeleted = false;
+
   runInAction(() => {
-    store.tours = discovered
-      .flat()
-      .sort((left, right) => left.title.localeCompare(right.title))
-      .filter(canShowTour);
+    store.tours = nextTours;
 
     if (store.activeTour) {
       const activeTour = store.tours.find(
         tour => tour.id === store.activeTour!.tour.id
       );
       if (activeTour) {
+        if (hasPendingActiveTourEdit()) {
+          const index = store.tours.indexOf(activeTour);
+          mergeExternalTourDuringEdit(activeTour);
+          store.tours[index] = store.activeTour.tour;
+          return;
+        }
         const previousStepNumber = store.activeTour.step;
         const previousStep =
           previousStepNumber >= 0 &&
@@ -108,11 +126,22 @@ export async function discoverTours(): Promise<void> {
         let nextStepNumber = previousStepNumber;
         if (previousStep) {
           const serializedStep = JSON.stringify(previousStep);
-          const matchingStepNumber = activeTour.steps.findIndex(
-            step => JSON.stringify(step) === serializedStep
-          );
-          if (matchingStepNumber >= 0) {
-            nextStepNumber = matchingStepNumber;
+          if (
+            !activeTour.steps[previousStepNumber] ||
+            JSON.stringify(activeTour.steps[previousStepNumber]) !==
+              serializedStep
+          ) {
+            const matchingStepNumbers = activeTour.steps
+              .map((step, index) => ({ step, index }))
+              .filter(({ step }) => JSON.stringify(step) === serializedStep)
+              .sort(
+                (left, right) =>
+                  Math.abs(left.index - previousStepNumber) -
+                  Math.abs(right.index - previousStepNumber)
+              );
+            if (matchingStepNumbers.length > 0) {
+              nextStepNumber = matchingStepNumbers[0].index;
+            }
           }
         }
         nextStepNumber = activeTour.steps.length
@@ -124,11 +153,16 @@ export async function discoverTours(): Promise<void> {
         const activeUri = vscode.Uri.parse(store.activeTour.tour.id);
         const folder = vscode.workspace.getWorkspaceFolder(activeUri);
         if (folder && isDiscoveredTourUri(folder, activeUri)) {
-          void endCurrentCodeTour();
+          activeTourWasDeleted = true;
         }
       }
     }
   });
+
+  if (activeTourWasDeleted) {
+    await cancelActiveTourEdit();
+    await endCurrentCodeTour(false);
+  }
 
   await vscode.commands.executeCommand(
     "setContext",
@@ -139,6 +173,26 @@ export async function discoverTours(): Promise<void> {
     isInitialDiscovery = false;
     await migrateTourSchemas(store.tours);
   }
+}
+
+export function refreshTours(): Promise<number> {
+  if (manualRefresh) {
+    return manualRefresh;
+  }
+
+  manualRefresh = (async () => {
+    if (discoveryTimer) {
+      clearTimeout(discoveryTimer);
+      discoveryTimer = undefined;
+    }
+    deletedTourUris.clear();
+    rebuildWatchers();
+    await discoverTours();
+    return store.tours.length;
+  })().finally(() => {
+    manualRefresh = undefined;
+  });
+  return manualRefresh;
 }
 
 function scheduleDiscovery() {
@@ -199,11 +253,7 @@ async function readTourFile(
     const source = openDocument
       ? openDocument.getText()
       : await readUriContents(tourUri);
-    const tour = JSON.parse(source) as CodeTour;
-    if (!tour.title || !Array.isArray(tour.steps)) {
-      throw new Error("The tour must contain a title and steps array.");
-    }
-    tour.id = key;
+    const tour = parseCodeTour(source, key);
     lastValidTours.set(key, tour);
     return tour;
   } catch (error) {
@@ -289,6 +339,24 @@ function rebuildWatchers() {
   });
 }
 
+function markTourChanged(uri: vscode.Uri) {
+  const folder = vscode.workspace.getWorkspaceFolder(uri);
+  if (folder && isDiscoveredTourUri(folder, uri)) {
+    deletedTourUris.delete(uri.toString());
+    scheduleDiscovery();
+  }
+}
+
+function markTourDeleted(uri: vscode.Uri) {
+  const folder = vscode.workspace.getWorkspaceFolder(uri);
+  if (folder && isDiscoveredTourUri(folder, uri)) {
+    const key = uri.toString();
+    deletedTourUris.add(key);
+    lastValidTours.delete(key);
+    scheduleDiscovery();
+  }
+}
+
 export function registerTourProvider(context: vscode.ExtensionContext) {
   rebuildWatchers();
   context.subscriptions.push(
@@ -304,6 +372,18 @@ export function registerTourProvider(context: vscode.ExtensionContext) {
       rebuildWatchers();
       scheduleDiscovery();
     }),
+    vscode.workspace.onDidCreateFiles(event =>
+      event.files.forEach(markTourChanged)
+    ),
+    vscode.workspace.onDidDeleteFiles(event =>
+      event.files.forEach(markTourDeleted)
+    ),
+    vscode.workspace.onDidRenameFiles(event =>
+      event.files.forEach(({ oldUri, newUri }) => {
+        markTourDeleted(oldUri);
+        markTourChanged(newUri);
+      })
+    ),
     vscode.workspace.onDidChangeConfiguration(event => {
       if (event.affectsConfiguration(`${EXTENSION_NAME}.customTourDirectory`)) {
         rebuildWatchers();

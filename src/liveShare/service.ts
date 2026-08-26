@@ -31,11 +31,13 @@ export default function (
     })
   );
 
-  service.onNotify(TOUR_ENDED_NOTIFICATION, (message: Message) => {
+  service.onNotify(TOUR_ENDED_NOTIFICATION, async (message: Message) => {
     if (message.peer === peer) return;
 
-    void endCurrentCodeTour(false);
-    if (api.session.role === Role.Host) {
+    if (
+      (await endCurrentCodeTour(false)) &&
+      api.session.role === Role.Host
+    ) {
       service.notify(TOUR_ENDED_NOTIFICATION, message);
     }
   });
@@ -60,7 +62,7 @@ export default function (
     })
   );
 
-  service.onNotify(TOUR_STARTED_NOTIFICATION, (message: Message) => {
+  service.onNotify(TOUR_STARTED_NOTIFICATION, async (message: Message) => {
     if (message.peer === peer) return;
 
     const incomingTour = { ...message.data.tour };
@@ -69,12 +71,15 @@ export default function (
         .convertSharedUriToLocal(Uri.parse(incomingTour.id))
         .toString();
     }
+    if (!(await endCurrentCodeTour(false))) {
+      return;
+    }
     startCodeTour(
       incomingTour,
       message.data.stepNumber,
       undefined,
       false,
-      true,
+      false,
       undefined,
       false
     );

@@ -3,10 +3,11 @@
 
 import { observable } from "mobx";
 import { CommentThread, Uri } from "vscode";
+import { CodeTourSymbolKind } from "../symbolKind";
 
 export interface CodeTourSymbolPathSegment {
   name: string;
-  kind: number;
+  kind: CodeTourSymbolKind;
 }
 
 export interface CodeTourSymbolAnchor {
@@ -69,6 +70,7 @@ export interface CodeTour {
 export interface ActiveTour {
   tour: CodeTour;
   step: number;
+  canEditTour?: boolean;
 
   // When recording, a tour can be active, without
   // having created an actual comment yet.

@@ -7,7 +7,12 @@ import { anchorResolver } from "../../anchors";
 import { getRecordingCommentingRanges } from "../../player";
 import { CodeTourFileSystemProvider } from "../../player/fileSystem";
 import { getGutterStepAnchor } from "../../recorder/commands";
+import {
+  cancelActiveTourEdit,
+  mergeExternalTourDuringEdit
+} from "../../recorder/editSession";
 import { CodeTour, store } from "../../store";
+import { isWritableTourUri } from "../../store/editability";
 import {
   getTourSchemaReference,
   initializeTourPersistence,
@@ -138,10 +143,10 @@ describe("resilient tour anchors", () => {
       ),
       ["line", "symbol", "content"]
     );
-    assert.strictEqual(
-      schema.definitions.symbolPathSegment.properties.kind.type,
-      "integer"
-    );
+    const symbolKind = schema.definitions.symbolPathSegment.properties.kind;
+    assert.ok(symbolKind.oneOf[0].enum.includes("Class"));
+    assert.ok(symbolKind.oneOf[0].enum.includes("Method"));
+    assert.strictEqual(symbolKind.oneOf[1].type, "integer");
     assert.strictEqual(schema.definitions.step.oneOf.length, 5);
   });
 
@@ -210,6 +215,20 @@ describe("resilient tour anchors", () => {
     assert.strictEqual(resolution?.range?.start.line, 1);
   });
 
+  it("resolves canonical English SymbolKind names", async () => {
+    const tour = createTour({
+      file: "sample.txt",
+      description: "canonical symbol",
+      anchor: {
+        type: "symbol",
+        path: [{ name: "betaMember", kind: "Method" }]
+      }
+    });
+    const resolution = await anchorResolver.resolveStep(tour, 0);
+    assert.strictEqual(resolution?.state, "resolved");
+    assert.strictEqual(resolution?.range?.start.line, 1);
+  });
+
   it("selects only the first line of a multiline symbol", async () => {
     const tour = createTour({
       file: "sample.txt",
@@ -271,7 +290,73 @@ describe("resilient tour anchors", () => {
     const anchor = store.tours[0].steps[0].anchor;
     assert.strictEqual(anchor?.type, "content");
     assert.strictEqual(anchor?.type === "content" && anchor.text, "theta");
+    const persistedBeforeSave = JSON.parse(
+      new TextDecoder().decode(
+        await vscode.workspace.fs.readFile(vscode.Uri.parse(tour.id))
+      )
+    );
+    assert.strictEqual(persistedBeforeSave.steps[0].anchor.text, "alpha");
+
+    assert.strictEqual(await document.save(), true);
+    await new Promise(resolve => setTimeout(resolve, 700));
+    const persistedAfterSave = JSON.parse(
+      new TextDecoder().decode(
+        await vscode.workspace.fs.readFile(vscode.Uri.parse(tour.id))
+      )
+    );
+    assert.strictEqual(persistedAfterSave.steps[0].anchor.text, "theta");
     store.tours = [];
+  });
+
+  it("does not mutate anchors from a read-only tour source", async () => {
+    const fileUri = vscode.Uri.joinPath(getWorkspaceRoot(), "readonly.txt");
+    await vscode.workspace.fs.writeFile(
+      fileUri,
+      new TextEncoder().encode("stable content\n")
+    );
+    const tour: CodeTour = {
+      id: "https://example.invalid/readonly.tour",
+      title: "Read-only",
+      steps: [
+        {
+          file: "readonly.txt",
+          description: "read-only content",
+          anchor: { type: "content", text: "stable content" }
+        }
+      ]
+    };
+    store.activeTour = {
+      tour,
+      step: 0,
+      canEditTour: false,
+      workspaceRoot: getWorkspaceRoot(),
+      thread: null
+    };
+
+    try {
+      await anchorResolver.resolveStep(tour, 0);
+      const document = await vscode.workspace.openTextDocument(fileUri);
+      const edit = new vscode.WorkspaceEdit();
+      edit.replace(document.uri, new vscode.Range(0, 0, 0, 6), "changed");
+      assert.strictEqual(await vscode.workspace.applyEdit(edit), true);
+      await new Promise(resolve => setTimeout(resolve, 700));
+      assert.strictEqual(tour.steps[0].anchor?.type, "content");
+      assert.strictEqual(
+        tour.steps[0].anchor?.type === "content" &&
+          tour.steps[0].anchor.text,
+        "stable content"
+      );
+    } finally {
+      store.activeTour = null;
+    }
+  });
+
+  it("treats Live Share and remote URLs as read-only tour sources", () => {
+    assert.strictEqual(isWritableTourUri(vscode.Uri.parse("vsls:/shared.tour")), false);
+    assert.strictEqual(
+      isWritableTourUri(vscode.Uri.parse("https://example.invalid/tour")),
+      false
+    );
   });
 
   it("writes a workspace-local schema and changes only the schema field", async () => {
@@ -345,6 +430,32 @@ describe("resilient tour anchors", () => {
     );
   });
 
+  it("preserves a conflicting schema file beside a tour", async () => {
+    const directoryUri = vscode.Uri.joinPath(
+      getWorkspaceRoot(),
+      "schema-conflict"
+    );
+    const schemaUri = vscode.Uri.joinPath(directoryUri, "schema.json");
+    const tourUri = vscode.Uri.joinPath(directoryUri, "conflict.tour");
+    const customSchema = '{"title":"Application schema"}\n';
+    await vscode.workspace.fs.createDirectory(directoryUri);
+    await vscode.workspace.fs.writeFile(
+      schemaUri,
+      new TextEncoder().encode(customSchema)
+    );
+    const tour: CodeTour = {
+      id: tourUri.toString(),
+      title: "Schema Conflict",
+      steps: []
+    };
+
+    await assert.rejects(() => saveTour(tour));
+    assert.strictEqual(
+      new TextDecoder().decode(await vscode.workspace.fs.readFile(schemaUri)),
+      customSchema
+    );
+  });
+
   it("persists virtual content edits as decoded text", async () => {
     const tour = createTour({
       file: "embedded.txt",
@@ -369,7 +480,7 @@ describe("resilient tour anchors", () => {
       );
 
       assert.strictEqual(
-        store.activeTour.tour.steps[0].contents,
+        store.activeTour!.tour.steps[0].contents,
         "after\ncontent"
       );
       const persisted = JSON.parse(
@@ -385,6 +496,24 @@ describe("resilient tour anchors", () => {
     } finally {
       store.activeTour = null;
     }
+  });
+
+  it("normalizes legacy integer SymbolKinds when saving", async () => {
+    const tour = createTour({
+      file: "sample.txt",
+      description: "legacy symbol kind",
+      anchor: {
+        type: "symbol",
+        path: [{ name: "betaMember", kind: vscode.SymbolKind.Method }]
+      }
+    });
+    await saveTour(tour);
+    const persisted = JSON.parse(
+      new TextDecoder().decode(
+        await vscode.workspace.fs.readFile(vscode.Uri.parse(tour.id))
+      )
+    );
+    assert.strictEqual(persisted.steps[0].anchor.path[0].kind, "Method");
   });
 
   it("isolates embedded files by tour and step identity", async () => {
@@ -517,6 +646,58 @@ describe("resilient tour anchors", () => {
     assert.strictEqual(await document.save(), true);
   });
 
+  it("keeps the last valid panel model while a dirty tour is malformed", async () => {
+    const tourUri = vscode.Uri.joinPath(
+      getWorkspaceRoot(),
+      ".tours",
+      "malformed-live-edit.tour"
+    );
+    const validContents = JSON.stringify(
+      { title: "Valid Live Tour", steps: [{ description: "valid" }] },
+      null,
+      2
+    );
+    await vscode.workspace.fs.writeFile(
+      tourUri,
+      new TextEncoder().encode(validContents)
+    );
+    await waitFor(() =>
+      store.tours.some(tour => tour.title === "Valid Live Tour")
+    );
+
+    const document = await vscode.workspace.openTextDocument(tourUri);
+    const malformedContents = JSON.stringify(
+      { title: "Malformed Live Tour", steps: [null] },
+      null,
+      2
+    );
+    const malformedEdit = new vscode.WorkspaceEdit();
+    malformedEdit.replace(
+      tourUri,
+      new vscode.Range(
+        document.positionAt(0),
+        document.positionAt(document.getText().length)
+      ),
+      malformedContents
+    );
+    assert.strictEqual(await vscode.workspace.applyEdit(malformedEdit), true);
+    await new Promise(resolve => setTimeout(resolve, 300));
+    assert.ok(store.tours.some(tour => tour.title === "Valid Live Tour"));
+    assert.ok(store.tours.every(tour => tour.title !== "Malformed Live Tour"));
+
+    const restoreEdit = new vscode.WorkspaceEdit();
+    restoreEdit.replace(
+      tourUri,
+      new vscode.Range(
+        document.positionAt(0),
+        document.positionAt(document.getText().length)
+      ),
+      validContents
+    );
+    assert.strictEqual(await vscode.workspace.applyEdit(restoreEdit), true);
+    assert.strictEqual(await document.save(), true);
+  });
+
   it("restores the active step after an external tour reorder", async () => {
     const tourUri = vscode.Uri.joinPath(
       getWorkspaceRoot(),
@@ -564,9 +745,91 @@ describe("resilient tour anchors", () => {
     store.activeTour = null;
   });
 
+  it("preserves unrelated external changes during an active step edit", async () => {
+    const tourId = "https://example.invalid/external-edit.tour";
+    const activeTour: CodeTour = {
+      id: tourId,
+      title: "External Edit",
+      steps: [
+        { description: "editing" },
+        { description: "before external change" }
+      ]
+    };
+    const comment = {
+      body: "local draft",
+      savedBody: "editing",
+      mode: vscode.CommentMode.Editing
+    } as vscode.Comment & { savedBody: string };
+    const thread = {
+      comments: [comment],
+      dispose() {}
+    } as unknown as vscode.CommentThread;
+    store.activeTour = {
+      tour: activeTour,
+      step: 0,
+      canEditTour: true,
+      thread
+    };
+    store.isEditing = true;
+
+    try {
+      const externalTour: CodeTour = {
+        id: tourId,
+        title: "External Edit",
+        steps: [
+          { description: "editing" },
+          { description: "after external change" }
+        ]
+      };
+      assert.strictEqual(mergeExternalTourDuringEdit(externalTour), true);
+      assert.strictEqual(
+        store.activeTour.tour.steps[1].description,
+        "after external change"
+      );
+      await cancelActiveTourEdit();
+      assert.strictEqual(
+        store.activeTour.tour.steps[1].description,
+        "after external change"
+      );
+    } finally {
+      store.activeTour = null;
+      store.isEditing = false;
+    }
+  });
+
   it("opens the CodeTour view inside Explorer", async () => {
+    const manifest = JSON.parse(
+      new TextDecoder().decode(
+        await vscode.workspace.fs.readFile(
+          vscode.Uri.joinPath(extensionUri, "package.json")
+        )
+      )
+    );
+    assert.ok(
+      manifest.contributes.views.explorer.some(
+        (view: { id: string }) => view.id === "codetour.tours"
+      )
+    );
     const commands = await vscode.commands.getCommands(true);
     assert.ok(commands.includes("codetour.openCodeTourPanel"));
+    manifest.contributes.commands.forEach(({ command }: { command: string }) =>
+      assert.ok(commands.includes(command), `Command is not registered: ${command}`)
+    );
     await vscode.commands.executeCommand("codetour.openCodeTourPanel");
+  });
+
+  it("creates a standard CodeTour authoring skill", async () => {
+    await vscode.commands.executeCommand("codetour.createCodeTourSkill");
+    const skillUri = vscode.Uri.joinPath(
+      getWorkspaceRoot(),
+      ".tours",
+      "SKILL.md"
+    );
+    const contents = new TextDecoder().decode(
+      await vscode.workspace.fs.readFile(skillUri)
+    );
+    assert.match(contents, /^---\nname: codetour-authoring\n/);
+    assert.match(contents, /## Balance Detail and Step Count/);
+    assert.match(contents, /"\$schema": "\.\/schema\.json"/);
   });
 });

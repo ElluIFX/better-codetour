@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 import { comparer, reaction } from "mobx";
+import * as os from "os";
 import * as vscode from "vscode";
 import {
   CodeTour,
@@ -10,13 +11,25 @@ import {
   store
 } from "../store";
 import { saveTour } from "../store/persistence";
+import { isWritableTourSource } from "../store/editability";
 import { getFileUri, getStepFileUri, getWorkspaceUri } from "../utils";
+import { normalizeSymbolKind, symbolKindsEqual } from "../symbolKind";
 
 interface SymbolCandidate {
   path: CodeTourSymbolPathSegment[];
   range: vscode.Range;
   selectionRange: vscode.Range;
 }
+
+interface PendingAnchorUpdate {
+  tour: CodeTour;
+  step: CodeTour["steps"][number];
+  originalStep: string;
+  originalAnchor: NonNullable<CodeTour["steps"][number]["anchor"]>;
+  uri: vscode.Uri;
+}
+
+const IS_WINDOWS = os.platform() === "win32";
 
 export interface AnchorResolution {
   state: CodeTourAnchorState;
@@ -57,7 +70,7 @@ function getTourWorkspaceRoot(tour: CodeTour) {
 
 function comparableUri(uri: vscode.Uri) {
   const value = uri.toString();
-  return process.platform === "win32" && uri.scheme === "file"
+  return IS_WINDOWS && uri.scheme === "file"
     ? value.toLocaleLowerCase()
     : value;
 }
@@ -78,7 +91,8 @@ function pathsEqual(
     left.length === right.length &&
     left.every(
       (segment, index) =>
-        segment.name === right[index].name && segment.kind === right[index].kind
+        segment.name === right[index].name &&
+        symbolKindsEqual(segment.kind, right[index].kind)
     )
   );
 }
@@ -104,7 +118,13 @@ function flattenDocumentSymbols(
   parentPath: readonly CodeTourSymbolPathSegment[] = []
 ): SymbolCandidate[] {
   return symbols.flatMap(symbol => {
-    const path = [...parentPath, { name: symbol.name, kind: symbol.kind }];
+    const path = [
+      ...parentPath,
+      {
+        name: symbol.name,
+        kind: normalizeSymbolKind(symbol.kind) || symbol.kind
+      }
+    ];
     return [
       {
         path,
@@ -139,7 +159,12 @@ async function getSymbolCandidates(
       visited: Set<vscode.SymbolInformation> = new Set()
     ): CodeTourSymbolPathSegment[] => {
       if (!symbol.containerName || visited.has(symbol)) {
-        return [{ name: symbol.name, kind: symbol.kind }];
+        return [
+          {
+            name: symbol.name,
+            kind: normalizeSymbolKind(symbol.kind) || symbol.kind
+          }
+        ];
       }
       visited.add(symbol);
       const parent = information
@@ -156,7 +181,10 @@ async function getSymbolCandidates(
         )[0];
       return [
         ...(parent ? getInformationPath(parent, visited) : []),
-        { name: symbol.name, kind: symbol.kind }
+        {
+          name: symbol.name,
+          kind: normalizeSymbolKind(symbol.kind) || symbol.kind
+        }
       ];
     };
 
@@ -206,19 +234,53 @@ class TourAnchorResolver implements vscode.Disposable {
   private readonly resolutions = new Map<string, AnchorResolution>();
   private readonly generations = new Map<string, number>();
   private readonly sourceWatchers = new Map<string, vscode.FileSystemWatcher>();
-  private readonly saveTimers = new Map<
-    string,
-    ReturnType<typeof setTimeout>
+  private readonly pendingAnchorUpdates = new Map<
+    CodeTour["steps"][number],
+    PendingAnchorUpdate
   >();
   private readonly resolveTimers = new Map<
     string,
     ReturnType<typeof setTimeout>
   >();
-  private readonly trackedSymbolOffsets = new Map<string, number>();
+  private readonly trackedSymbolOffsets = new Map<
+    string,
+    { start: number; end: number }
+  >();
   private readonly disposables: vscode.Disposable[] = [];
   private readonly changeEmitter = new vscode.EventEmitter<void>();
 
   readonly onDidChange = this.changeEmitter.event;
+
+  mergePendingTour(externalTour: CodeTour) {
+    Array.from(this.pendingAnchorUpdates.entries()).forEach(
+      ([pendingStep, update]) => {
+        if (update.tour.id !== externalTour.id || update.tour === externalTour) {
+          return;
+        }
+        const previousIndex = update.tour.steps.indexOf(update.step);
+        const matchingSteps = externalTour.steps
+          .map((step, index) => ({ step, index }))
+          .filter(({ step }) => JSON.stringify(step) === update.originalStep)
+          .sort(
+            (left, right) =>
+              Math.abs(left.index - previousIndex) -
+              Math.abs(right.index - previousIndex)
+          );
+        this.pendingAnchorUpdates.delete(pendingStep);
+        const match = matchingSteps[0];
+        if (!match || !update.step.anchor) {
+          return;
+        }
+        match.step.anchor = JSON.parse(JSON.stringify(update.step.anchor));
+        this.pendingAnchorUpdates.set(match.step, {
+          ...update,
+          tour: externalTour,
+          step: match.step
+        });
+      }
+    );
+    return externalTour;
+  }
 
   register(context: vscode.ExtensionContext) {
     const disposeReaction = reaction(
@@ -238,9 +300,14 @@ class TourAnchorResolver implements vscode.Disposable {
       vscode.workspace.onDidChangeTextDocument(event =>
         this.handleDocumentChange(event)
       ),
-      vscode.workspace.onDidSaveTextDocument(document =>
-        this.scheduleResolveUri(document.uri)
-      ),
+      vscode.workspace.onDidSaveTextDocument(document => {
+        this.commitPendingAnchorUpdates(document.uri);
+        this.scheduleResolveUri(document.uri);
+      }),
+      vscode.workspace.onDidCloseTextDocument(document => {
+        this.restorePendingAnchorUpdates(document.uri);
+        this.scheduleResolveUri(document.uri);
+      }),
       vscode.workspace.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration("codetour.autoUpdateAnchors")) {
           void this.resolveAll();
@@ -493,22 +560,25 @@ class TourAnchorResolver implements vscode.Disposable {
       if (
         resolution?.state === "unresolved" &&
         step.anchor?.type === "symbol" &&
-        trackedOffset !== undefined
+        trackedOffset !== undefined &&
+        trackedOffset.end > trackedOffset.start
       ) {
         const document = await vscode.workspace.openTextDocument(uri);
         const candidate = await this.findSymbolAt(
           uri,
-          document.positionAt(trackedOffset)
+          document.positionAt(trackedOffset.start)
         );
         const currentPath = step.anchor.path;
         if (
           candidate &&
           candidate.path.length === currentPath.length &&
-          candidate.path[candidate.path.length - 1].kind ===
+          symbolKindsEqual(
+            candidate.path[candidate.path.length - 1].kind,
             currentPath[currentPath.length - 1].kind
+          )
         ) {
+          this.trackPendingAnchorUpdate(tour, step, uri);
           step.anchor.path = candidate.path;
-          this.scheduleSave(tour);
           resolution = await this.resolveStep(tour, stepNumber);
         }
       }
@@ -519,6 +589,13 @@ class TourAnchorResolver implements vscode.Disposable {
   private markUriUnresolved(uri: vscode.Uri) {
     this.getStepsForUri(uri).forEach(({ tour, stepNumber }) => {
       const key = getAnchorKey(tour, stepNumber);
+      const resolution = this.resolutions.get(key);
+      if (
+        resolution &&
+        comparableUri(resolution.uri) !== comparableUri(uri)
+      ) {
+        return;
+      }
       const generation = (this.generations.get(key) || 0) + 1;
       this.generations.set(key, generation);
       this.publish(key, { state: "unresolved", uri }, generation);
@@ -538,6 +615,8 @@ class TourAnchorResolver implements vscode.Disposable {
       const key = getAnchorKey(tour, stepNumber);
       const resolution = this.resolutions.get(key);
       if (
+        !resolution ||
+        comparableUri(resolution.uri) !== comparableUri(event.document.uri) ||
         resolution?.state !== "resolved" ||
         resolution.startOffset === undefined ||
         resolution.endOffset === undefined ||
@@ -582,38 +661,118 @@ class TourAnchorResolver implements vscode.Disposable {
       });
       this.changeEmitter.fire();
 
-      if (autoUpdate && intersects && step.anchor?.type === "content") {
+      if (
+        autoUpdate &&
+        isWritableTourSource(tour) &&
+        intersects &&
+        step.anchor?.type === "content"
+      ) {
         const text = normalizeContent(event.document.getText(nextRange));
         if (text) {
+          this.trackPendingAnchorUpdate(tour, step, event.document.uri);
           step.anchor.text = text;
-          this.scheduleSave(tour);
         }
-      } else if (autoUpdate && intersects && step.anchor?.type === "symbol") {
-        this.trackedSymbolOffsets.set(key, newStart);
+      } else if (
+        autoUpdate &&
+        isWritableTourSource(tour) &&
+        step.anchor?.type === "symbol"
+      ) {
+        this.trackedSymbolOffsets.set(key, { start: newStart, end: newEnd });
       }
     });
 
     this.scheduleResolveUri(event.document.uri);
   }
 
-  private scheduleSave(tour: CodeTour) {
-    const previous = this.saveTimers.get(tour.id);
-    if (previous) {
-      clearTimeout(previous);
+  private trackPendingAnchorUpdate(
+    tour: CodeTour,
+    step: CodeTour["steps"][number],
+    uri: vscode.Uri
+  ) {
+    if (!step.anchor || !isWritableTourSource(tour)) {
+      return;
     }
-    this.saveTimers.set(
-      tour.id,
-      setTimeout(() => {
-        this.saveTimers.delete(tour.id);
-        void saveTour(tour);
-      }, 500)
-    );
+    if (!this.pendingAnchorUpdates.has(step)) {
+      this.pendingAnchorUpdates.set(step, {
+        tour,
+        step,
+        originalStep: JSON.stringify(step),
+        originalAnchor: JSON.parse(JSON.stringify(step.anchor)),
+        uri
+      });
+    }
+  }
+
+  private commitPendingAnchorUpdates(uri: vscode.Uri) {
+    const updatesByTour = new Map<string, PendingAnchorUpdate[]>();
+    this.pendingAnchorUpdates.forEach((update, step) => {
+      if (comparableUri(update.uri) !== comparableUri(uri)) {
+        return;
+      }
+      this.pendingAnchorUpdates.delete(step);
+      const updates = updatesByTour.get(update.tour.id) || [];
+      updates.push(update);
+      updatesByTour.set(update.tour.id, updates);
+    });
+    updatesByTour.forEach((updates, tourId) => {
+      void this.commitPendingTourUpdates(tourId, updates);
+    });
+  }
+
+  private async commitPendingTourUpdates(
+    tourId: string,
+    updates: PendingAnchorUpdate[]
+  ) {
+    try {
+      const stat = await vscode.workspace.fs.stat(vscode.Uri.parse(tourId));
+      if (stat.type !== vscode.FileType.File) {
+        return;
+      }
+      const tour = getKnownTours().find(candidate => candidate.id === tourId);
+      if (!tour || !isWritableTourSource(tour)) {
+        return;
+      }
+      let didUpdate = false;
+      updates.forEach(update => {
+        let step = tour.steps.includes(update.step) ? update.step : undefined;
+        if (!step) {
+          step = tour.steps.find(candidate => {
+            const candidateWithOriginalAnchor = {
+              ...candidate,
+              anchor: update.originalAnchor
+            };
+            return JSON.stringify(candidateWithOriginalAnchor) === update.originalStep;
+          });
+        }
+        if (step && update.step.anchor) {
+          step.anchor = JSON.parse(JSON.stringify(update.step.anchor));
+          didUpdate = true;
+        }
+      });
+      if (didUpdate) {
+        await saveTour(tour);
+      }
+    } catch {
+      return;
+    }
+  }
+
+  private restorePendingAnchorUpdates(uri: vscode.Uri) {
+    this.pendingAnchorUpdates.forEach((update, step) => {
+      if (comparableUri(update.uri) !== comparableUri(uri)) {
+        return;
+      }
+      this.pendingAnchorUpdates.delete(step);
+      if (update.tour.steps.includes(update.step)) {
+        update.step.anchor = update.originalAnchor;
+      }
+    });
   }
 
   dispose() {
     this.disposables.forEach(disposable => disposable.dispose());
     this.sourceWatchers.forEach(watcher => watcher.dispose());
-    this.saveTimers.forEach(timer => clearTimeout(timer));
+    this.pendingAnchorUpdates.clear();
     this.resolveTimers.forEach(timer => clearTimeout(timer));
     this.changeEmitter.dispose();
   }

@@ -13,3 +13,4 @@ webpack.config.js
 .git/**
 .github/**
 **/*.svg
+!images/add-content.svg

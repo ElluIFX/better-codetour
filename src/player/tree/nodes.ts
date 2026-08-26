@@ -12,6 +12,7 @@ import {
 import { anchorResolver } from "../../anchors";
 import { CONTENT_URI, EXTENSION_NAME } from "../../constants";
 import { CodeTour, store } from "../../store";
+import { isTourEditable } from "../../store/actions";
 import { progress } from "../../store/storage";
 import {
   getEmbeddedStepUri,
@@ -61,6 +62,13 @@ export class CodeTourNode extends TreeItem {
     if (isActive) {
       contextValues.push("active");
     }
+    if (isTourEditable(tour)) {
+      contextValues.push("editable");
+    }
+    const scheme = tour.id ? Uri.parse(tour.id).scheme : "";
+    if (scheme !== "http" && scheme !== "https") {
+      contextValues.push("fileBacked");
+    }
 
     this.contextValue = contextValues.join(".");
 
@@ -99,16 +107,22 @@ export class CodeTourStepNode extends TreeItem {
         ? `${EXTENSION_NAME}.editTourAtStep`
         : anchorUnavailable
         ? `${EXTENSION_NAME}.rebindTourStepAnchor`
+        : isRecording(tour)
+        ? `${EXTENSION_NAME}.editTourAtStep`
         : `${EXTENSION_NAME}.startTour`,
       title: anchorMissing
         ? l10n.t("Edit Step")
         : anchorUnavailable
         ? l10n.t("Rebind Tour Step Anchor")
+        : isRecording(tour)
+        ? l10n.t("Edit Step")
         : l10n.t("Start Tour"),
       arguments: [tour, stepNumber, workspaceRoot, tours]
     };
-    if (anchorMissing) {
+    if (anchorMissing || (isRecording(tour) && !anchorUnavailable)) {
       this.command.arguments = [this];
+    }
+    if (anchorMissing) {
       this.description = l10n.t("Anchor missing");
       this.tooltip = l10n.t(
         "This file step has no anchor. Edit the step and bind it before playing the tour."
@@ -211,6 +225,12 @@ export class CodeTourStepNode extends TreeItem {
       contextValues.push("lineAnchor");
     } else if (step.anchor) {
       contextValues.push("resilientAnchor");
+    }
+    if (isTourEditable(tour)) {
+      contextValues.push("editable");
+    }
+    if (isRecording(tour)) {
+      contextValues.push("recording");
     }
 
     this.contextValue = contextValues.join(".");

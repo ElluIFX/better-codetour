@@ -42,6 +42,16 @@ export function registerStatusBar(context: vscode.ExtensionContext) {
         }
 
         const tourTitle = getTourTitle(store.activeTour.tour);
+        if (store.isRecording && store.activeTour.step < 0) {
+          currentTourItem.text = vscode.l10n.t(
+            "Recording CodeTour: {0} — add the first step",
+            tourTitle
+          );
+          currentTourItem.tooltip = vscode.l10n.t(
+            "Select source text for a content-matched step, or use the editor gutter and context menu."
+          );
+          return;
+        }
         const progress = vscode.l10n.t(
           "CodeTour: #{0} of {1} ({2})",
           store.activeTour.step + 1,
@@ -51,6 +61,7 @@ export function registerStatusBar(context: vscode.ExtensionContext) {
         currentTourItem.text = store.isRecording
           ? vscode.l10n.t("Recording {0}", progress)
           : progress;
+        currentTourItem.tooltip = vscode.l10n.t("Resume CodeTour");
       } else {
         if (currentTourItem) {
           currentTourItem.dispose();
@@ -59,5 +70,11 @@ export function registerStatusBar(context: vscode.ExtensionContext) {
       }
     }
   );
-  context.subscriptions.push({ dispose: disposeReaction });
+  context.subscriptions.push({
+    dispose() {
+      disposeReaction();
+      currentTourItem?.dispose();
+      currentTourItem = null;
+    }
+  });
 }

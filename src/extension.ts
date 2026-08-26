@@ -12,6 +12,7 @@ import { registerRecorderModule } from "./recorder";
 import { store } from "./store";
 import {
   promptForTour,
+  selectTour,
   startCodeTour,
   startDefaultTour
 } from "./store/actions";
@@ -28,10 +29,15 @@ import { initializeTourPersistence } from "./store/persistence";
  */
 let cachedDiscoverTours: Promise<void> | undefined;
 function discoverTours(): Promise<void> {
-  return cachedDiscoverTours ?? (cachedDiscoverTours = _discoverTours());
+  if (!cachedDiscoverTours) {
+    cachedDiscoverTours = _discoverTours().finally(() => {
+      cachedDiscoverTours = undefined;
+    });
+  }
+  return cachedDiscoverTours;
 }
 
-function startTour(params: URLSearchParams) {
+async function startTour(params: URLSearchParams) {
   let tourPath = params.get("tour");
   const step = params.get("step");
 
@@ -39,7 +45,10 @@ function startTour(params: URLSearchParams) {
   if (step) {
     // Allow the step number to be
     // provided as 1-based vs. 0-based
-    stepNumber = Number(step) - 1;
+    const parsedStep = Number(step);
+    if (Number.isFinite(parsedStep) && Number.isInteger(parsedStep)) {
+      stepNumber = parsedStep - 1;
+    }
   }
 
   if (tourPath) {
@@ -47,12 +56,30 @@ function startTour(params: URLSearchParams) {
       tourPath = `${tourPath}.tour`;
     }
 
-    const tour = store.tours.find(tour => tour.id.endsWith(tourPath as string));
-    if (tour) {
-      startCodeTour(tour, stepNumber);
+    const tours = store.tours.filter(tour =>
+      tour.id.endsWith(tourPath as string)
+    );
+    if (tours.length > 0) {
+      const ended = await vscode.commands.executeCommand<boolean>(
+        "codetour.endTour",
+        false
+      );
+      if (ended === false) {
+        return;
+      }
+      if (tours.length === 1) {
+        const tour = tours[0];
+        startCodeTour(
+          tour,
+          stepNumber,
+          vscode.workspace.getWorkspaceFolder(vscode.Uri.parse(tour.id))?.uri
+        );
+      } else {
+        await selectTour(tours, undefined, stepNumber);
+      }
     }
   } else {
-    startDefaultTour(undefined, undefined, stepNumber);
+    await startDefaultTour(undefined, undefined, stepNumber);
   }
 }
 
@@ -73,7 +100,7 @@ class URIHandler implements vscode.UriHandler {
 
     if (query) {
       const params = new URLSearchParams(query);
-      startTour(params);
+      await startTour(params);
     } else {
       startDefaultTour();
     }

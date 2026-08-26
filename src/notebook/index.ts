@@ -2,9 +2,10 @@
 // Licensed under the MIT License.
 
 import * as vscode from "vscode";
-import { EXTENSION_NAME, SMALL_ICON_URL } from "../constants";
+import { EXTENSION_NAME } from "../constants";
 import { anchorResolver } from "../anchors";
-import { CodeTour, store } from "../store";
+import { store } from "../store";
+import { parseCodeTour } from "../store/validation";
 import { getStepFileUri, getWorkspaceUri } from "../utils";
 
 class CodeTourNotebookProvider implements vscode.NotebookSerializer {
@@ -14,7 +15,7 @@ class CodeTourNotebookProvider implements vscode.NotebookSerializer {
   ): Promise<vscode.NotebookData> {
     const contents = new TextDecoder().decode(content);
 
-    const persistedTour = JSON.parse(contents) as CodeTour;
+    const persistedTour = parseCodeTour(contents, "");
     const tour = { ...persistedTour };
     const knownTours = [
       ...(store.activeTour ? [store.activeTour.tour] : []),
@@ -69,9 +70,10 @@ class CodeTourNotebookProvider implements vscode.NotebookSerializer {
     cells.push(
       new vscode.NotebookCellData(
         1,
-        `## ![Icon](${SMALL_ICON_URL})&nbsp;&nbsp; CodeTour (${
-          tour.title
-        }) - ${vscode.l10n.t("{0} steps", steps.length)}\n\n${
+        `## CodeTour (${tour.title}) - ${vscode.l10n.t(
+          "{0} steps",
+          steps.length
+        )}\n\n${
           tour.description === undefined ? "" : tour.description
         }`,
         "markdown"

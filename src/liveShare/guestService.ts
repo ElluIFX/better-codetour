@@ -3,7 +3,7 @@
 
 import * as vsls from "vsls";
 import { EXTENSION_NAME } from "../constants";
-import { startCodeTour } from "../store/actions";
+import { endCurrentCodeTour, startCodeTour } from "../store/actions";
 import initializeBaseService from "./service";
 
 export async function initializeService(vslsApi: vsls.LiveShare) {
@@ -12,12 +12,15 @@ export async function initializeService(vslsApi: vsls.LiveShare) {
 
   const response = await service.request("getCurrentTourStep", []);
   if (response) {
+    if (!(await endCurrentCodeTour(false))) {
+      return;
+    }
     startCodeTour(
       response.tour,
       response.stepNumber,
       undefined,
       false,
-      true,
+      false,
       undefined,
       false
     );
